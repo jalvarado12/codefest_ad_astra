@@ -1,57 +1,3 @@
-"""
-===============================================================================
- PROCESAR_EXCEL.PY
-===============================================================================
-Script AUTÓNOMO que hace TODO el proceso para archivos Excel (.xlsx, .xls),
-de principio a fin:
-
-    1. Busca todos los .xlsx/.xls dentro de una carpeta (y sus
-       subcarpetas, sin importar cuántos niveles tenga).
-    2. Extrae el contenido de cada hoja: cada fila se convierte en texto
-       como "columna: valor | columna: valor | ...".
-    3. Lo limpia (quita basura, normaliza, colapsa espacios).
-    4. Detecta el idioma predominante (es/en/pt).
-    5. Le asigna un doc_id único e inmutable.
-    6. Escribe todo a un archivo .jsonl (un documento por línea).
-
-Es "autónomo" a propósito: no importa nada de otros scripts (ni siquiera
-de procesar_pdf.py). Todo lo que necesita está en este único archivo.
-Por eso vas a ver funciones de limpieza y de doc_id calcadas de los
-otros scripts: es duplicación intencional, no un error — así cada
-script se puede leer y correr sin depender de más piezas.
-
-CÓMO SE USA
------------
-    python3 procesar_excel.py --input data_raw --output documentos_excel.jsonl
-
-    --input     : carpeta raíz donde están tus Excel (busca en
-                  subcarpetas también, sin importar la profundidad).
-    --output    : archivo .jsonl de salida (default: documentos_excel.jsonl)
-    --errors    : archivo .jsonl con los Excel que fallaron
-                  (default: errores_excel.jsonl)
-    --registry  : archivo donde se guardan los doc_id ya asignados
-                  (default: doc_registry.json). IMPORTANTE: si también vas
-                  a correr procesar_pdf.py / procesar_csv.py /
-                  procesar_texto.py sobre el MISMO corpus, déjalos todos
-                  apuntando al mismo --registry (el nombre por defecto ya
-                  es igual en los 4 scripts) para que ningún doc_id se
-                  repita entre formatos.
-    --resume    : si la corrida se corta a mitad de camino, corre de
-                  nuevo con esta bandera y no repite el trabajo ya hecho.
-
-DEPENDENCIAS (instalar con pip)
---------------------------------
-    pip install pandas openpyxl langdetect --break-system-packages
-===============================================================================
-"""
-
-# ==============================================================================
-# SECCIÓN 1: IMPORTS
-# ==============================================================================
-# pandas: lee el archivo Excel y lo convierte en una tabla (DataFrame) que
-# podemos recorrer fila por fila. openpyxl es el "motor" que pandas usa por
-# debajo para poder leer archivos .xlsx (hay que tenerlo instalado aunque
-# no se importe directamente).
 import pandas as pd
 
 import re
@@ -67,12 +13,7 @@ from langdetect import detect, DetectorFactory, LangDetectException
 DetectorFactory.seed = 0
 
 
-# ==============================================================================
-# SECCIÓN 2: LIMPIEZA Y NORMALIZACIÓN DE TEXTO
-# ==============================================================================
-# (Idéntico a procesar_pdf.py: ver los comentarios allá para el detalle de
-# por qué se hace cada paso. Aquí solo se repite para que este script sea
-# autosuficiente.)
+# LIMPIEZA Y NORMALIZACIÓN DE TEXTO
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 _WEIRD_SPACES_RE = re.compile(r"[\u00a0\u200b\u200c\u200d\ufeff]")
@@ -127,18 +68,9 @@ def clean_text(raw_text: str) -> str:
     return text
 
 
-# ==============================================================================
-# SECCIÓN 3: EXTRACCIÓN DE TEXTO DEL EXCEL
-# ==============================================================================
+# EXTRACCIÓN DE TEXTO DEL EXCEL
 def _fila_a_texto(fila: dict, separador: str = " | ") -> str:
-    """
-    Convierte una fila (un diccionario columna -> valor) en un renglón de
-    texto tipo 'columna: valor | columna: valor | ...'.
-
-    Se omiten las celdas vacías (None, cadena vacía, o el texto literal
-    "nan" que deja pandas cuando una celda no tiene dato), para no llenar
-    el texto de ruido tipo "poblacion: nan".
-    """
+   
     pares = [
         f"{columna}: {valor}"
         for columna, valor in fila.items()
@@ -148,25 +80,7 @@ def _fila_a_texto(fila: dict, separador: str = " | ") -> str:
 
 
 def extraer_texto_excel(file_path: Path, sheet_name=0) -> tuple[str, dict]:
-    """
-    Lee una hoja de un archivo Excel y devuelve (texto_crudo, metadata_extra).
-
-    Cómo funciona:
-      - pd.read_excel() lee la hoja indicada (por defecto la primera,
-        sheet_name=0) y la convierte en un DataFrame, con dtype=str para
-        que todos los valores lleguen como texto (evita que pandas
-        interprete de más, por ejemplo convirtiendo un código postal en
-        número y perdiendo ceros a la izquierda).
-      - fillna("") reemplaza las celdas vacías (NaN) por texto vacío.
-      - to_dict(orient="records") convierte el DataFrame en una lista de
-        diccionarios, uno por fila: [{"columna1": "valor", ...}, ...]
-      - Cada fila se convierte a texto con _fila_a_texto() y se unen
-        todas con saltos de línea.
-
-    Cada fila queda como una unidad de texto independiente dentro del
-    documento; si más adelante alguien fragmenta (chunking) este texto,
-    lo natural es que cada fila termine siendo su propio fragmento.
-    """
+    
     df = pd.read_excel(file_path, sheet_name=sheet_name, dtype=str)
     df = df.fillna("")
 
@@ -180,11 +94,7 @@ def extraer_texto_excel(file_path: Path, sheet_name=0) -> tuple[str, dict]:
     return texto_completo, metadata_extra
 
 
-# ==============================================================================
-# SECCIÓN 4: ASIGNACIÓN DE doc_id (registro persistente)
-# ==============================================================================
-# (Idéntico a procesar_pdf.py: ver los comentarios allá para el porqué.)
-class RegistroDocumentos:
+#ASIGNACIÓN DE doc_id 
     def __init__(self, registry_path: str = "doc_registry.json"):
         self.registry_path = Path(registry_path)
         if self.registry_path.exists():
@@ -212,14 +122,7 @@ class RegistroDocumentos:
             json.dump(self._mapa, f, ensure_ascii=False, indent=2)
 
 
-# ==============================================================================
-# SECCIÓN 5: INFERENCIA DEL FENÓMENO (1, 2 o 3) A PARTIR DE LA RUTA
-# ==============================================================================
-# Dos patrones porque en la práctica hemos visto dos convenciones:
-#   1) "fenomeno_1", "Fenómeno 2", "fenomeno-3"
-#   2) "F1_algo", "F2_otro", "F3_mas"  <- la que realmente usa el corpus
-#      de CODEFEST (ej. "F1_IA_y_Capacidades_Estrategicas")
-# Si tu corpus usa una tercera convención, agrega un patrón más a esta lista.
+#INFERENCIA DEL FENÓMENO (1, 2 o 3) A PARTIR DE LA RUTA
 FENOMENO_PATTERNS = [
     re.compile(r"fen[oó]meno[\s_-]*([123])", re.IGNORECASE),
     re.compile(r"^f([123])[_\s-]", re.IGNORECASE),
@@ -227,13 +130,7 @@ FENOMENO_PATTERNS = [
 
 
 def inferir_fenomeno(ruta_relativa: Path) -> int | None:
-    """
-    Recorre cada segmento de la ruta (cada nombre de carpeta) probando
-    todos los patrones de FENOMENO_PATTERNS, en orden. Devuelve 1, 2 o 3
-    en cuanto alguno coincide, o None si ninguno coincide en ningún
-    segmento (para que quede como advertencia explícita en vez de
-    asumir un valor incorrecto).
-    """
+   
     for segmento in ruta_relativa.parts:
         for patron in FENOMENO_PATTERNS:
             coincidencia = patron.search(segmento)
@@ -242,9 +139,7 @@ def inferir_fenomeno(ruta_relativa: Path) -> int | None:
     return None
 
 
-# ==============================================================================
-# SECCIÓN 6: PIPELINE PRINCIPAL
-# ==============================================================================
+#PIPELINE PRINCIPAL
 def _leer_fuentes_ya_procesadas(output_path: str) -> set:
     ya_procesadas = set()
     p = Path(output_path)
@@ -273,9 +168,7 @@ def procesar_corpus_excel(input_dir: str, output_path: str, errors_path: str,
     n_ok, n_err, n_saltados = 0, 0, 0
     t0 = time.time()
 
-    # Buscamos ambas extensiones de Excel: la moderna (.xlsx) y la
-    # antigua (.xls). rglob busca de forma recursiva en todas las
-    # subcarpetas, sin importar la profundidad.
+    
     archivos_excel = sorted(
         list(input_dir.rglob("*.xlsx")) + list(input_dir.rglob("*.xls"))
     )
@@ -322,10 +215,7 @@ def procesar_corpus_excel(input_dir: str, output_path: str, errors_path: str,
                 n_ok += 1
 
             except Exception as e:
-                # Motivos típicos de fallo aquí: archivo .xls antiguo sin
-                # el motor correcto instalado, archivo protegido con
-                # contraseña, o un archivo con extensión .xlsx que en
-                # realidad no es un Excel válido.
+               
                 err_f.write(json.dumps({
                     "fuente": ruta_relativa_str,
                     "error": str(e),
@@ -343,9 +233,7 @@ def procesar_corpus_excel(input_dir: str, output_path: str, errors_path: str,
     print(f"Registro de doc_id       : {registry_path}")
 
 
-# ==============================================================================
-# SECCIÓN 7: LÍNEA DE COMANDOS
-# ==============================================================================
+#LÍNEA DE COMANDOS
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Extracción y limpieza de archivos Excel (CODEFEST AD ASTRA 2026)."
