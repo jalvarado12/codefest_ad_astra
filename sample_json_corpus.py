@@ -1,4 +1,4 @@
-"""Draw a stratified JSON-only sample from the corpus for chunking hand-off.
+"""Extract the whole JSON corpus for chunking hand-off.
 
 Scope: JSON-format documents only (json_extract.py's domain). Catalog/registry
 files are excluded -- they carry no chunkable prose, see catalog_metadata.py.
@@ -6,9 +6,8 @@ Fenomeno comes from the top-level corpus folder (F1/F2/F3_*), which is how the
 real corpus is organized -- corpus.py's phenomenon_from_path regex does not
 match this naming (no word boundary after the digit before an underscore).
 
-Output: sample_for_chunking.jsonl, one extracted document per line, stratified
-round-robin across (fenomeno, source_org) so no single organization or
-phenomenon dominates the sample.
+Output: sample_for_chunking.jsonl, one extracted document per line, every
+JSON document in the corpus that clears json_extract's tier-3 floor.
 """
 
 import json
@@ -21,7 +20,6 @@ from catalog_metadata import CATALOG_FILES
 from json_extract import JsonIlegible, JsonSinTexto, extract_json
 
 CORPUS_ROOT = Path("CORPUS CODEFEST AD ASTRA 2026")
-N_DOCS = 30
 SEED = 20260807
 
 
@@ -39,8 +37,7 @@ def source_org(path, root):
 def build_sample():
     files = sorted(p for p in CORPUS_ROOT.rglob("*.json") if p.name not in CATALOG_FILES)
 
-    cells = defaultdict(list)
-    skipped = []
+    picked, skipped = [], []
     for p in files:
         try:
             texto, meta, traza = extract_json(p)
@@ -48,27 +45,13 @@ def build_sample():
             skipped.append((str(p), type(e).__name__))
             continue
         fen = fenomeno_from_top_folder(p, CORPUS_ROOT)
-        org = source_org(p, CORPUS_ROOT)
-        cells[(fen, org)].append({
+        picked.append({
             "fuente": str(p.relative_to(CORPUS_ROOT)).replace("\\", "/"),
             "formato": "json",
             "fenomeno": fen,
             "texto": texto,
             "n_words": len(texto.split()),
         })
-
-    import random
-    rng = random.Random(SEED)
-    for docs in cells.values():
-        rng.shuffle(docs)
-
-    order = sorted(cells)
-    picked, i = [], 0
-    while len(picked) < N_DOCS and any(cells[c] for c in order):
-        cell = order[i % len(order)]
-        if cells[cell]:
-            picked.append(cells[cell].pop(0))
-        i += 1
 
     for n, doc in enumerate(picked):
         doc["doc_id"] = f"DOC-{n:04d}"
