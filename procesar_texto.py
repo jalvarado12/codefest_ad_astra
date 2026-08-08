@@ -1,52 +1,3 @@
-"""
-===============================================================================
- PROCESAR_TEXTO.PY
-===============================================================================
-Script AUTÓNOMO que hace TODO el proceso para archivos de texto plano
-(.txt y .md), de principio a fin:
-
-    1. Busca todos los .txt y .md dentro de una carpeta (y sus
-       subcarpetas, sin importar cuántos niveles tenga).
-    2. "Extrae" el contenido: como ya son texto plano, este paso es
-       simplemente leer el archivo (a diferencia de PDF/Excel/CSV, aquí
-       no hay que parsear ninguna estructura).
-    3. Lo limpia (quita basura, normaliza, colapsa espacios).
-    4. Detecta el idioma predominante (es/en/pt).
-    5. Le asigna un doc_id único e inmutable.
-    6. Escribe todo a un archivo .jsonl (un documento por línea).
-
-Es "autónomo" a propósito: no importa nada de otros scripts. Todo lo que
-necesita está en este único archivo. Por eso vas a ver funciones de
-limpieza y de doc_id calcadas de los otros tres scripts: es duplicación
-intencional, no un error.
-
-CÓMO SE USA
------------
-    python3 procesar_texto.py --input data_raw --output documentos_texto.jsonl
-
-    --input     : carpeta raíz donde están tus .txt/.md (busca en
-                  subcarpetas también, sin importar la profundidad).
-    --output    : archivo .jsonl de salida (default: documentos_texto.jsonl)
-    --errors    : archivo .jsonl con los archivos que fallaron
-                  (default: errores_texto.jsonl)
-    --registry  : archivo donde se guardan los doc_id ya asignados
-                  (default: doc_registry.json). Compártelo con los otros
-                  3 scripts para que los doc_id no choquen entre formatos.
-    --resume    : si la corrida se corta a mitad de camino, corre de
-                  nuevo con esta bandera y no repite el trabajo ya hecho.
-
-DEPENDENCIAS (instalar con pip)
---------------------------------
-    pip install langdetect --break-system-packages
-===============================================================================
-"""
-
-# ==============================================================================
-# SECCIÓN 1: IMPORTS
-# ==============================================================================
-# Nota: este script no necesita ninguna librería especial para "leer" el
-# archivo (a diferencia de PyMuPDF para PDF o pandas para Excel/CSV),
-# porque .txt y .md ya son texto plano: basta con abrir el archivo.
 import re
 import unicodedata
 from collections import Counter
@@ -60,11 +11,7 @@ from langdetect import detect, DetectorFactory, LangDetectException
 DetectorFactory.seed = 0
 
 
-# ==============================================================================
-# SECCIÓN 2: LIMPIEZA Y NORMALIZACIÓN DE TEXTO
-# ==============================================================================
-# (Idéntico a los otros 3 scripts: ver los comentarios allá para el
-# detalle de cada paso.)
+# LIMPIEZA Y NORMALIZACIÓN DE TEXTO
 
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 _WEIRD_SPACES_RE = re.compile(r"[\u00a0\u200b\u200c\u200d\ufeff]")
@@ -119,31 +66,9 @@ def clean_text(raw_text: str) -> str:
     return text
 
 
-# ==============================================================================
-# SECCIÓN 3: EXTRACCIÓN DE TEXTO (.txt / .md)
-# ==============================================================================
+# EXTRACCIÓN DE TEXTO 
 def extraer_texto_plano(file_path: Path) -> tuple[str, dict]:
-    """
-    Lee un archivo .txt o .md y devuelve (texto_crudo, metadata_extra).
-
-    Como estos formatos ya son texto plano, no hay nada que "parsear":
-    basta con leer el archivo. La única complicación real es la
-    codificación de caracteres: no todos los archivos vienen en UTF-8
-    (algunos .txt viejos pueden venir en latin-1 / Windows-1252,
-    especialmente si fueron exportados desde Excel o Word en Windows).
-
-    Estrategia usada aquí:
-      1. Intentar leer como UTF-8 (el estándar moderno y el más común).
-      2. Si falla por un error de decodificación, reintentar como
-         latin-1, que es un superconjunto de bytes válido para casi
-         cualquier archivo de texto en español (nunca lanza error de
-         decodificación, aunque el resultado no sea perfecto si el
-         archivo en realidad usaba otra codificación distinta).
-
-    Para archivos .md, se conservan los encabezados (#, ##, etc.) tal
-    cual, porque son señales útiles para la fragmentación (chunking)
-    jerárquica que haría otra parte del equipo más adelante.
-    """
+   
     try:
         texto = file_path.read_text(encoding="utf-8")
         codificacion_usada = "utf-8"
@@ -158,9 +83,7 @@ def extraer_texto_plano(file_path: Path) -> tuple[str, dict]:
     return texto, metadata_extra
 
 
-# ==============================================================================
-# SECCIÓN 4: ASIGNACIÓN DE doc_id (registro persistente)
-# ==============================================================================
+# SECCIÓN 4: ASIGNACIÓN DE doc_id 
 class RegistroDocumentos:
     def __init__(self, registry_path: str = "doc_registry.json"):
         self.registry_path = Path(registry_path)
@@ -189,14 +112,8 @@ class RegistroDocumentos:
             json.dump(self._mapa, f, ensure_ascii=False, indent=2)
 
 
-# ==============================================================================
-# SECCIÓN 5: INFERENCIA DEL FENÓMENO (1, 2 o 3) A PARTIR DE LA RUTA
-# ==============================================================================
-# Dos patrones porque en la práctica hemos visto dos convenciones:
-#   1) "fenomeno_1", "Fenómeno 2", "fenomeno-3"
-#   2) "F1_algo", "F2_otro", "F3_mas"  <- la que realmente usa el corpus
-#      de CODEFEST (ej. "F1_IA_y_Capacidades_Estrategicas")
-# Si tu corpus usa una tercera convención, agrega un patrón más a esta lista.
+# INFERENCIA DEL FENÓMENO (1, 2 o 3) A PARTIR DE LA RUTA
+
 FENOMENO_PATTERNS = [
     re.compile(r"fen[oó]meno[\s_-]*([123])", re.IGNORECASE),
     re.compile(r"^f([123])[_\s-]", re.IGNORECASE),
@@ -204,13 +121,7 @@ FENOMENO_PATTERNS = [
 
 
 def inferir_fenomeno(ruta_relativa: Path) -> int | None:
-    """
-    Recorre cada segmento de la ruta (cada nombre de carpeta) probando
-    todos los patrones de FENOMENO_PATTERNS, en orden. Devuelve 1, 2 o 3
-    en cuanto alguno coincide, o None si ninguno coincide en ningún
-    segmento (para que quede como advertencia explícita en vez de
-    asumir un valor incorrecto).
-    """
+   
     for segmento in ruta_relativa.parts:
         for patron in FENOMENO_PATTERNS:
             coincidencia = patron.search(segmento)
@@ -219,9 +130,7 @@ def inferir_fenomeno(ruta_relativa: Path) -> int | None:
     return None
 
 
-# ==============================================================================
-# SECCIÓN 6: PIPELINE PRINCIPAL
-# ==============================================================================
+# PIPELINE PRINCIPAL
 def _leer_fuentes_ya_procesadas(output_path: str) -> set:
     ya_procesadas = set()
     p = Path(output_path)
@@ -250,7 +159,6 @@ def procesar_corpus_texto(input_dir: str, output_path: str, errors_path: str,
     n_ok, n_err, n_saltados = 0, 0, 0
     t0 = time.time()
 
-    # Buscamos ambas extensiones de texto plano.
     archivos_texto = sorted(
         list(input_dir.rglob("*.txt")) + list(input_dir.rglob("*.md"))
     )
@@ -316,9 +224,7 @@ def procesar_corpus_texto(input_dir: str, output_path: str, errors_path: str,
     print(f"Registro de doc_id       : {registry_path}")
 
 
-# ==============================================================================
-# SECCIÓN 7: LÍNEA DE COMANDOS
-# ==============================================================================
+# LÍNEA DE COMANDOS
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Extracción y limpieza de archivos de texto plano .txt/.md "
