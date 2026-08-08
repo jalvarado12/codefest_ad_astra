@@ -1,0 +1,29 @@
+[
+ {
+  "doc_id": "DOC-0000",
+  "fuente": "ad_astra.md",
+  "formato": "md",
+  "fenomeno": 2,
+  "idioma": "es",
+  "n_words": 0,
+  "path": "..\\ad_astra.md"
+ },
+ {
+  "doc_id": "DOC-0001",
+  "fuente": "embedding_research_report.md",
+  "formato": "md",
+  "fenomeno": 1,
+  "idioma": "en",
+  "n_words": 0,
+  "path": "..\\embedding_research_report.md"
+ },
+ {
+  "doc_id": "DOC-0002",
+  "fuente": "final-architecture-decision-report.md",
+  "formato": "md",
+  "fenomeno": 1,
+  "idioma": "en",
+  "n_words": 0,
+  "path": "..\\final-architecture-decision-report.md"
+ }
+]

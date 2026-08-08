@@ -1,0 +1,56 @@
+{
+ "encode_e5": {
+  "seconds": 55.97,
+  "rss_start_mb": 365.2,
+  "rss_end_mb": 472.7,
+  "from_cache": false
+ },
+ "encode_bge": {
+  "seconds": 69.13,
+  "rss_start_mb": 472.7,
+  "rss_end_mb": 478.8,
+  "from_cache": false
+ },
+ "A_index": {
+  "seconds": 0.0,
+  "rss_start_mb": 478.8,
+  "rss_end_mb": 478.9,
+  "from_cache": false
+ },
+ "A_query_latency_s": {
+  "mean": 0.653,
+  "p50": 0.653,
+  "max": 0.918,
+  "n_queries": 2
+ },
+ "A_index_bytes": 61440,
+ "A_indexing_cost_s": 55.97,
+ "B_index": {
+  "seconds": 0.0,
+  "rss_start_mb": 498.7,
+  "rss_end_mb": 498.8,
+  "from_cache": false
+ },
+ "B_query_latency_s": {
+  "mean": 0.652,
+  "p50": 0.652,
+  "max": 0.874,
+  "n_queries": 2
+ },
+ "B_index_bytes": 84060,
+ "B_indexing_cost_s": 69.13,
+ "C_index": {
+  "seconds": 0.0,
+  "rss_start_mb": 505.9,
+  "rss_end_mb": 506.0,
+  "from_cache": false
+ },
+ "C_query_latency_s": {
+  "mean": 1.416,
+  "p50": 1.416,
+  "max": 1.76,
+  "n_queries": 2
+ },
+ "C_index_bytes": 84060,
+ "C_indexing_cost_s": 125.1
+}

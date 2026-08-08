@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+
+# raw corpus mirrors (3GB each) — never push
+CORPUS CODEFEST AD ASTRA 2026/
+corpus_by_type/

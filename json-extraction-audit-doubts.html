@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>json-extraction-audit-doubts.md</title>
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="jsonextractpy-audit--doubts-for-review">json_extract.py audit — doubts for review</h1>
+<p>No code changed. This is a read-only re-derivation of extraction against all 964
+files in <code>corpus_by_type/json/</code>, built to check <code>json_extract.py</code> against the
+actual corpus rather than only the 17 synthetic self-check fixtures.</p>
+<p><strong>Method</strong>: ran <code>json_extract.extract_json()</code> unmodified over all 964 files
+(fresh log at <code>arch_test/data/extraccion_json.jsonl</code>, 938 tier-1, 0 tier-2,
+26 tier-3 — matches prior census). Then, for each file, ran five independent
+diagnostic checks against the real harvest/assemble logic (not shipped code,
+audit-only, output at <code>arch_test/data/audit_flags.jsonl</code>):</p>
+<ul>
+<li>A. strings inside <code>NOISE</code>-classified keys that never reach the output anywhere</li>
+<li>B. blob-role text dropped file-wide because a paragraph list exists elsewhere
+(the <code>has_para</code> rule in <code>_assemble</code> is file-scoped, not per-field)</li>
+<li>C. same normalized metadata key hit more than once with different values
+(<code>meta.setdefault</code> keeps only the first)</li>
+<li>D. metadata values truncated at <code>TRUNC_META</code> (300 chars)</li>
+<li>E. near-duplicate (ratio &gt; 0.9, not byte-identical) chunks surviving the
+exact-string dedup in <code>_assemble</code></li>
+</ul>
+<p>Every flagged file was then opened and read against its raw JSON to separate
+real defects from audit false positives. Findings below, ranked by what I'd
+actually want a decision on.</p>
+<hr>
+<h2 id="1-six-catalogregistry-files-pass-as-tier-1-%22documents%22--high-needs-a-decision">1. Six catalog/registry files pass as tier-1 &quot;documents&quot; — HIGH, needs a decision</h2>
+<p>The corpus has ~20 catalog/registry/index JSON files (scraper bookkeeping: one
+entry per downloaded PDF, fields like <code>title</code>/<code>url</code>/<code>status</code>/<code>scraped_at</code>, no
+body prose). 14 of them correctly fail as tier-3 (<code>JsonSinTexto</code>) — already
+known and classified in <code>json-schema-survey.md</code>.</p>
+<p><strong>Six were missed by that earlier review because they pass tier-1 clean</strong>,
+concatenating every entry's <code>title</code> field into a word count above the 30-word
+floor. They look, to the pipeline, exactly like a legitimate &quot;list of several
+short articles&quot; (self-check fixture #8 covers that case on purpose). There is
+no signal in <code>json_extract.py</code> that tells the two apart.</p>
+<table>
+<thead>
+<tr>
+<th>file</th>
+<th style="text-align:right">tier-1 word count</th>
+<th>what the &quot;document&quot; actually is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RESDAL_catalog-2.json</code></td>
+<td style="text-align:right">578</td>
+<td>95 chapter/country PDF titles, e.g. &quot;Atlas 2024 ESP – Colombia&quot;</td>
+</tr>
+<tr>
+<td><code>ceeep_catalogo.json</code></td>
+<td style="text-align:right">1047</td>
+<td>article title index</td>
+</tr>
+<tr>
+<td><code>sipri_full_catalogo.json</code></td>
+<td style="text-align:right">520</td>
+<td>article title index</td>
+</tr>
+<tr>
+<td><code>DAIO_catalog-2.json</code></td>
+<td style="text-align:right">248</td>
+<td>title+subtitle index</td>
+</tr>
+<tr>
+<td><code>MAPPOEA_mapp-catalog.json</code></td>
+<td style="text-align:right">117</td>
+<td>title index</td>
+</tr>
+<tr>
+<td><code>ceobs_full_catalogo.json</code></td>
+<td style="text-align:right">109</td>
+<td>title index</td>
+</tr>
+</tbody>
+</table>
+<p>Cross-checked all six against the real files on disk, matching each catalog
+entry's filename/URL/JSON-pointer field (normalized for <code>_</code>/<code>-</code> drift) to
+<code>corpus_by_type/</code>:</p>
+<table>
+<thead>
+<tr>
+<th>catalog</th>
+<th style="text-align:right">entries</th>
+<th style="text-align:right">matched to a real file already in the corpus</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RESDAL_catalog-2.json</code></td>
+<td style="text-align:right">95</td>
+<td style="text-align:right"><strong>95/95</strong> — every <code>filename</code> matches a real PDF under <code>corpus_by_type/pdf/</code> (e.g. <code>01_ESP_El_Marco_Legal.pdf</code> catalog-side ↔ <code>RESDAL_01-esp-el-marco-legal.pdf</code> on disk)</td>
+</tr>
+<tr>
+<td><code>ceeep_catalogo.json</code></td>
+<td style="text-align:right">80</td>
+<td style="text-align:right">~80/80 — 82 real per-article <code>CEEEP_issue##-##-&lt;slug&gt;.json</code> files exist on disk, each already a full tier-1 document with real body text</td>
+</tr>
+<tr>
+<td><code>DAIO_catalog-2.json</code></td>
+<td style="text-align:right">35</td>
+<td style="text-align:right">~32/35 — 32 real <code>DAIO_study####-&lt;slug&gt;.pdf</code> files on disk, catalog references line up 1:1 with them by study number</td>
+</tr>
+<tr>
+<td><code>sipri_full_catalogo.json</code></td>
+<td style="text-align:right">50</td>
+<td style="text-align:right">39/50 confirmed (rest likely naming-slug drift, not re-chased) — each entry's <code>json</code> field points at a real per-article file that mostly exists on disk as its own document</td>
+</tr>
+<tr>
+<td><code>ceobs_full_catalogo.json</code></td>
+<td style="text-align:right">20</td>
+<td style="text-align:right">17/20 confirmed, same pattern</td>
+</tr>
+<tr>
+<td><code>MAPPOEA_mapp-catalog.json</code></td>
+<td style="text-align:right">78</td>
+<td style="text-align:right">different case — see below</td>
+</tr>
+</tbody>
+</table>
+<p>RESDAL, ceeep, DAIO, SIPRI, CEOBS: confirmed redundant. Every one of these
+catalogs is an index over content that is <strong>also</strong> present in the corpus as
+its own separate, real document (PDF or per-article JSON) — the catalog adds
+no unique retrievable content, only a duplicate title-salad &quot;document.&quot;</p>
+<p><strong><code>MAPPOEA_mapp-catalog.json</code> is a different case, worth flagging separately</strong>:
+of its 78 entries, only 10 have <code>status: 200</code>; 63 are <code>404</code> and 5 are <code>503</code>
+(68/78 have <code>size_bytes: 0</code> — the download never succeeded). So this
+&quot;document&quot;'s 117-word tier-1 text is mostly a list of titles for PDFs that
+were <strong>never actually retrieved</strong>, not a redundant copy of real content
+elsewhere. Its inclusion as a pseudo-document is the same F1@3/NDCG@10 risk
+as the others, but there is no equivalent &quot;the real thing is indexed
+elsewhere so this is harmless clutter&quot; excuse — most of what it names isn't
+in the corpus in any form.</p>
+<p><strong>Why this matters for scoring</strong>: each of these six becomes its own <code>doc_id</code>
+with <code>fuente</code> = the catalog filename (e.g. <code>RESDAL_catalog-2.json</code>), which
+almost certainly is not a <code>fuente</code> the evaluator's ground truth ever names —
+any retrieval hit on it is a pure F1@3 false positive. Its &quot;text&quot; is a title
+run-on, not prose, so it should score low on NDCG@10 relevance, but a
+title-salad chunk can still surface on keyword/lexical overlap (e.g. a country
+name) for an unrelated query and cost a rank slot.</p>
+<p><strong>Not fixed.</strong> Options to decide between: filter files whose shape is
+&quot;list of objects that are almost entirely META-role fields, no BODY-role
+field, above a size threshold&quot; before tier-1 acceptance; or filter by filename
+pattern (<code>*catalog*</code>, <code>*catalogo*</code>, <code>*registro*</code>, <code>*index*</code> — imperfect,
+already missed <code>DEFENSA21_articulos-2.json</code> by name); or accept the six as
+in-corpus noise and let retrieval mostly ignore them.</p>
+<hr>
+<h2 id="2-excerptresumensummary-fields-duplicate-the-article-opening--medium">2. <code>excerpt</code>/<code>resumen</code>/summary fields duplicate the article opening — MEDIUM</h2>
+<p><code>BODY_OTHER</code> (which includes <code>excerpt</code>, <code>resumen</code>, <code>summary</code>, <code>abstract</code>) is
+treated as always-distinct prose, kept alongside the body unconditionally.
+For several scraper families it is actually a CMS-generated teaser that
+repeats the article's opening sentence(s) near-verbatim, then diverges (cut at
+a different length, or continuing differently) — so <code>_assemble</code>'s exact-string
+dedup never catches it.</p>
+<p>Confirmed on <code>ATLCOUNCIL_01-event-recap-data-salon-episode-1.json</code>:
+<code>excerpt</code> and <code>body_paragraphs[0]</code> are identical for the first ~360 characters,
+then diverge. Both get kept as two separate chunks of near-identical content.</p>
+<p>Affects 121 of 964 files (~12.5%), concentrated by source:</p>
+<table>
+<thead>
+<tr>
+<th>prefix</th>
+<th style="text-align:right">files</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ATLCOUNCIL</td>
+<td style="text-align:right">57</td>
+</tr>
+<tr>
+<td>CSIS</td>
+<td style="text-align:right">33</td>
+</tr>
+<tr>
+<td>SWF</td>
+<td style="text-align:right">12</td>
+</tr>
+<tr>
+<td>SIPRI</td>
+<td style="text-align:right">7</td>
+</tr>
+<tr>
+<td>ESA</td>
+<td style="text-align:right">6</td>
+</tr>
+<tr>
+<td>CEOBS</td>
+<td style="text-align:right">3</td>
+</tr>
+<tr>
+<td>MAPPOEA, RESDAL, sipri</td>
+<td style="text-align:right">1 each</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Impact</strong>: wastes chunk/token budget on near-duplicate content rather than
+corrupting meaning — lower severity than #1, but real and corpus-wide, and the
+existing &quot;484 files body_text/body_paragraphs&quot; dedupe precedent (handled by
+the <code>has_para</code> blob-drop) doesn't cover cross-field near-duplicates.</p>
+<p><strong>Not fixed.</strong> Would need a near-duplicate check (containment / ratio
+threshold) between <code>BODY_OTHER</code> strings and the assembled body text, not just
+exact-match dedup.</p>
+<hr>
+<h2 id="3-tagstopics-metadata-truncated-mid-list-at-300-chars--low-likely-fine">3. <code>tags</code>/<code>topics</code> metadata truncated mid-list at 300 chars — LOW, likely fine</h2>
+<p>240 files hit <code>TRUNC_META</code> (300 chars): 186 on <code>tags</code>, 54 on <code>topics</code>, 1 on
+<code>authors</code>. Long tag/topic lists get cut mid-tag rather than mid-word-boundary-
+aware. Checked the <code>authors</code> case (<code>ATLCOUNCIL_07-welcoming-our-geotech- fellows.json</code>): 26 names joined by <code>&quot;, &quot;</code>, confirmed cut — the last handful
+of names are silently dropped from metadata.</p>
+<p><strong>Why this is probably not worth fixing</strong>: <code>tags</code>/<code>topics</code> are not in the
+spec's mandatory metadata fields (<code>doc_id</code>, <code>chunk_id</code>, <code>fuente</code>, <code>formato</code>,
+<code>fenomeno</code>, <code>posicion</code>, <code>num_tokens</code>, <code>texto</code>) — they're extras. The spec's
+allowed post-filters are <code>fenomeno</code>, language, date, and score — not tags. A
+truncated tag list only matters if the submission ends up filtering or
+displaying on it.</p>
+<hr>
+<h2 id="checked-and-found-clean-no-action-listed-so-theyre-not-re-litigated">Checked and found clean (no action, listed so they're not re-litigated)</h2>
+<ul>
+<li><strong>NOISE-key prose loss (check A)</strong>: 0 files. Every string classified under
+a <code>NOISE</code> key (<code>images</code>, <code>links</code>, <code>pdf_links</code>, ...) in the real corpus is
+either genuinely non-prose or duplicated elsewhere. The tier-1 decision to
+never traverse <code>NOISE</code> keys does not lose real content on this corpus.</li>
+<li><strong>File-wide blob-drop on <code>has_para</code> (check B)</strong>: 20 files flagged by the
+automated heuristic, all verified false positives — in every case the
+dropped <code>body_text</code> blob is <code>body_paragraphs</code> re-joined with a different
+separator (whole-string similarity ratio 0.91–1.00 against the kept text
+once compared correctly, i.e. as a whole rather than per-paragraph). The
+file-scoped drop rule is doing the right thing everywhere it fired.</li>
+<li><strong>Meta key collisions (check C)</strong>: all 12 files that hit this are catalog
+files (subsumed by finding #1) — a 95-entry catalog naturally repeats <code>url</code>,
+<code>status</code>, etc. 95 times, and only the first is kept as metadata for the
+catalog's own (undesirable) pseudo-document. No collision was found on a
+real content document, so <code>meta.setdefault</code> silently keeping only the first
+hit is not currently costing a real document its correct metadata.</li>
+<li><strong>tier-2 never fires on real data</strong> (0 of 964) — the rescue path is only
+exercised by the synthetic self-check fixtures, never by the actual corpus.
+Not a defect, just worth knowing the real corpus never needs it.</li>
+</ul>
+<hr>
+<h2 id="reproduce">Reproduce</h2>
+<pre class="hljs"><code><div>python json_extract.py --run corpus_by_type/json --log arch_test/data/extraccion_json.jsonl
+</div></code></pre>
+<p>regenerates the base extraction log used above (938/26/0 split). The five
+diagnostic checks were a throwaway audit script (not part of the repo), run
+against that log plus direct re-parsing of each raw file; every number above
+was then manually verified against the source JSON, not taken as-is from the
+heuristics.</p>
+
+</body>
+</html>

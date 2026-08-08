@@ -1,0 +1,4 @@
+{"queries": [
+ {"query_id": "s01", "texto": "¿Qué arquitectura de embeddings recomienda el informe?", "idioma": "es", "fenomeno": 1},
+ {"query_id": "s02", "texto": "How is NDCG@10 computed for fragments?", "idioma": "en", "fenomeno": 1}
+]}

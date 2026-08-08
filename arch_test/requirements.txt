@@ -1,0 +1,12 @@
+# Architecture comparison harness -- Colab (Linux + GPU) target.
+# torch/numpy/faiss come preinstalled on Colab images; pinned loosely so the
+# CLI's `uv pip install --system` does not fight the base image.
+sentence-transformers>=3.0
+FlagEmbedding>=1.3
+faiss-cpu>=1.8
+pypdf>=4.0
+beautifulsoup4>=4.12
+lxml>=5.0
+openpyxl>=3.1
+langdetect>=1.0.9
+psutil>=5.9
