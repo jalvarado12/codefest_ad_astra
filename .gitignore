@@ -1,0 +1,17 @@
+# Corpus de datos (pesado, no vive en git)
+CORPUS CODEFEST AD ASTRA 2026/
+CODEFEST_2026-1.pdf
+
+# Salidas generadas por los scripts de extracción (regenerables)
+documentos*.jsonl
+errores*.jsonl
+doc_registry.json
+_ocr_imagenes_txt/
+log_ocr.txt
+
+# Python
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

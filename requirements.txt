@@ -1,0 +1,11 @@
+PyMuPDF
+pytesseract
+Pillow
+langdetect
+pandas
+openpyxl
+pypdf
+python-docx
+faiss-cpu
+numpy
+mapbox-vector-tile
