@@ -1,141 +1,150 @@
 # embedding_pipeline
 
-> **Two files, two audiences.** `embedding_pipeline.py` is the full pipeline
-> with its test suite (chunk -> encode -> FAISS -> retrieve -> score) and
-> lives on the `embedding` branch only -- it is not pushed to `master`.
-> `embeddings_only.py` is a smaller cut of the same encoder logic with
-> chunking, FAISS/sparse indexing, RRF fusion and scoring stripped out --
-> **just text-in, vectors-out** -- and that is the file that goes to
-> `master`. See "Which file do I want?" below.
+> **Dos archivos, dos públicos.** `embedding_pipeline.py` es el pipeline
+> completo con su suite de pruebas (chunking -> encoding -> FAISS -> retrieval
+> -> scoring) y vive únicamente en la rama `embedding` -- no se sube a
+> `master`. `embeddings_only.py` es un recorte más pequeño de la misma lógica
+> de encoders, sin chunking, sin indexado FAISS/sparse, sin fusión RRF y sin
+> scoring -- **solo texto de entrada, vectores de salida** -- y ese es el
+> archivo que va a `master`. Ver "¿Qué archivo necesito?" más abajo.
 
-One self-contained script: chunk -> encode -> FAISS/sparse index -> retrieve
--> score, for architectures **A** (multilingual-e5-large dense), **B**
-(BAAI/bge-m3 dense+sparse hybrid) and **C** (e5 dense + bge-m3 sparse) -- the
-three finalists in `final-architecture-decision-report.md`.
+Un script autocontenido: chunking -> encoding -> índice FAISS/sparse ->
+retrieval -> scoring, para las arquitecturas **A** (multilingual-e5-large
+dense), **B** (BAAI/bge-m3 híbrido dense+sparse) y **C** (e5 dense + bge-m3
+sparse) -- las tres finalistas en `final-architecture-decision-report.md`.
 
-It is a **port**, not a redesign: every function in `embedding_pipeline.py`
-is lifted from `arch_test/{chunker,encoders,harness,metrics}.py` and merged
-into one file so the embedding process is not orchestrated across five
-imports. Two things were dropped on purpose:
+Es un **port**, no un rediseño: cada función de `embedding_pipeline.py` está
+tomada de `arch_test/{chunker,encoders,harness,metrics}.py` y fusionada en un
+solo archivo para que el proceso de embedding no quede orquestado a través de
+cinco imports. Se descartaron dos cosas a propósito:
 
-- **Architectures D/E** (all-MiniLM-L6-v2 trial arms) -- out of scope, only
-  A/B/C are finalists.
-- **Multi-format corpus extraction** (PDF/HTML/CSV/XLSX/OCR/PBF). That logic
-  lives on the `master` branch under `extraccion/` (`generar_documentos()`,
-  an Adapter-pattern pipeline) and is owned there. This script does not
-  duplicate it -- see "Input contract" below for the seam between the two.
+- **Arquitecturas D/E** (los brazos de prueba con all-MiniLM-L6-v2) -- fuera
+  de alcance, solo A/B/C son finalistas.
+- **Extracción multi-formato del corpus** (PDF/HTML/CSV/XLSX/OCR/PBF). Esa
+  lógica vive en la rama `master`, bajo `extraccion/`
+  (`generar_documentos()`, un pipeline con patrón Adapter), y es propiedad de
+  esa rama. Este script no la duplica -- ver "Contrato de entrada" más abajo
+  para el punto de unión entre ambas.
 
-## What's here
+## Qué hay aquí
 
-| File | Purpose |
+| Archivo | Propósito |
 |---|---|
-| `embedding_pipeline.py` | The whole pipeline (chunk, encode, FAISS/sparse index, retrieve, score) + `selftest`/`verify`. `embedding` branch only. |
-| `embeddings_only.py` | Just the two encoder classes (`E5Dense`, `BGEM3`) + a CLI to encode a JSONL of texts to `.npy`/`.pkl`. No chunking, no FAISS, no scoring. Goes to `master`. |
-| `requirements.txt` | Full deps, for `embedding_pipeline.py` (`sentence-transformers`, `FlagEmbedding`, `faiss-cpu`, `psutil`). |
-| `requirements_embeddings_only.txt` | Trimmed deps, for `embeddings_only.py` (`sentence-transformers`, `FlagEmbedding` only -- no `faiss-cpu`). |
+| `embedding_pipeline.py` | El pipeline completo (chunking, encoding, índice FAISS/sparse, retrieval, scoring) + `selftest`/`verify`. Solo en la rama `embedding`. |
+| `embeddings_only.py` | Solo las dos clases de encoders (`E5Dense`, `BGEM3`) + una CLI para codificar un JSONL de textos a `.npy`/`.pkl`. Sin chunking, sin FAISS, sin scoring. Va a `master`. |
+| `requirements.txt` | Dependencias completas, para `embedding_pipeline.py` (`sentence-transformers`, `FlagEmbedding`, `faiss-cpu`, `psutil`). |
+| `requirements_embeddings_only.txt` | Dependencias reducidas, para `embeddings_only.py` (solo `sentence-transformers`, `FlagEmbedding` -- sin `faiss-cpu`). |
 
-## Which file do I want?
+## ¿Qué archivo necesito?
 
-- Building or querying an actual FAISS index, need the sentence-complete
-  chunker, or want the `selftest`/`verify` self-checks? Use
-  **`embedding_pipeline.py`** (on `embedding`).
-- Already have chunked text from somewhere else and just need dense/sparse
-  vectors out, with no FAISS/chunking dependency pulled in? Use
-  **`embeddings_only.py`** (on `master`):
+- ¿Vas a construir o consultar un índice FAISS real, necesitas el chunker con
+  cortes solo en límites de oración, o quieres los self-checks
+  `selftest`/`verify`? Usa **`embedding_pipeline.py`** (en `embedding`).
+- ¿Ya tienes el texto troceado (chunked) desde otro lado y solo necesitas los
+  vectores dense/sparse, sin arrastrar la dependencia de FAISS/chunking? Usa
+  **`embeddings_only.py`** (en `master`):
 
   ```bash
-  python embeddings_only.py selftest                     # no GPU, no download
+  python embeddings_only.py selftest                     # sin GPU, sin descargas
   python embeddings_only.py encode --model e5 --mode passage \
       --in chunks.jsonl --out-dir out/
   python embeddings_only.py encode --model bge --in chunks.jsonl --out-dir out/
   ```
 
-  Both `encode` calls read the same `--text-field texto` (default) from the
-  input JSONL; `e5` needs `--mode query`/`passage` (the spec-mandated
-  prefix), `bge` always returns both heads from one pass regardless of mode.
+  Ambas llamadas a `encode` leen el mismo `--text-field texto` (por defecto)
+  del JSONL de entrada; `e5` necesita `--mode query`/`passage` (el prefijo
+  obligatorio según la especificación), `bge` siempre devuelve ambas cabezas
+  en un solo pase, sin importar el modo.
 
-## Input contract
+## Contrato de entrada
 
-A JSONL file, one pre-extracted document per line:
+Un archivo JSONL, un documento ya extraído por línea:
 
 ```json
 {"doc_id": "DOC-0001", "fuente": "debris_report.pdf", "formato": "pdf",
  "fenomeno": 2, "texto_limpio": "..."}
 ```
 
-This matches the schema `extraccion.pipeline.generar_documentos()` yields on
-`master`. (`"texto"` is also accepted as a fallback key for documents
-produced outside that pipeline.) Point `build` at a JSONL dump of that
-generator's output and it takes over from there -- chunking, encoding,
-indexing, retrieval, scoring.
+Este esquema coincide con el que produce (`yield`)
+`extraccion.pipeline.generar_documentos()` en `master`. (`"texto"` también se
+acepta como clave alternativa para documentos generados fuera de ese
+pipeline.) Apunta `build` a un volcado JSONL de la salida de ese generador y
+el script se encarga del resto -- chunking, encoding, indexado, retrieval,
+scoring.
 
-## Environment
+## Entorno
 
-Targets Colab (Linux + GPU). It does **not** import on a local Windows box:
-`sentence-transformers`/`FlagEmbedding` pull in `pyarrow`, which trips a
-Windows Application Control policy (`DLL load failed while importing lib`).
-`python embedding_pipeline.py selftest` is the one subcommand that runs
-anywhere -- it uses stub encoders and touches no ML library.
+Está pensado para Colab (Linux + GPU). **No** se puede importar en una
+máquina Windows local: `sentence-transformers`/`FlagEmbedding` arrastran
+`pyarrow`, lo que dispara una política de Application Control de Windows
+(`DLL load failed while importing lib`). `python embedding_pipeline.py
+selftest` es el único subcomando que corre en cualquier entorno -- usa
+encoders stub y no toca ninguna librería de ML.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## Architectures
+## Arquitecturas
 
-| Arch | Dense | Sparse | Cost | Notes |
+| Arch | Dense | Sparse | Costo | Notas |
 |---|---|---|---|---|
-| A | e5-large | -- | 1x | Baseline; mandatory `query:`/`passage:` prefixes applied by construction. |
-| B | bge-m3 | bge-m3 | ~1x | Both heads from ONE forward pass, RRF-fused internally. |
-| C | e5-large | bge-m3 | ~2x | Two full model passes; no fusion shortcuts. |
+| A | e5-large | -- | 1x | Línea base; los prefijos obligatorios `query:`/`passage:` se aplican por construcción. |
+| B | bge-m3 | bge-m3 | ~1x | Ambas cabezas salen de UN solo pase hacia adelante, fusionadas internamente con RRF. |
+| C | e5-large | bge-m3 | ~2x | Dos pases de modelo completos; sin atajos de fusión. |
 
 ## CLI
 
 ```bash
-# Wiring self-check -- no GPU, no model download, runs anywhere
+# Self-check de cableado -- sin GPU, sin descarga de modelos, corre en cualquier entorno
 python embedding_pipeline.py selftest
 
-# Real-model sanity check (loads actual weights) -- Colab only
+# Chequeo de sanidad con modelos reales (descarga los pesos reales) -- solo Colab
 python embedding_pipeline.py verify
 
-# Build: chunk + encode + FAISS index, written to the spec deliverable layout
+# Build: chunking + encoding + índice FAISS, escrito en el layout de entrega de la spec
 python embedding_pipeline.py build A --docs documentos.jsonl --chunk \
     --out-dir base_vectorial/encoder_A
 
-# Query: retrieve + shape output (+ score, if a CONFIRMED validation set exists)
+# Query: retrieval + formateo de salida (+ scoring, si existe un set de validación CONFIRMED)
 python embedding_pipeline.py query A --queries validation_confirmed.json
 
-# Query without a confirmed validation set (no NDCG/F1, just resultados-shaped output)
+# Query sin un set de validación confirmado (sin NDCG/F1, solo salida con forma de resultados)
 python embedding_pipeline.py query A --unscored --queries queries.json
 ```
 
-## Outputs
+## Salidas
 
-- `data/chunks.jsonl` -- chunk metadata (spec Table 1 fields); line order is
-  insertion order, which is also FAISS internal id order.
-- `<out-dir>/index.faiss`, `<out-dir>/metadata.jsonl` -- the
-  `base_vectorial/encoder_<nombre>/` deliverable layout, loadable with a
-  plain `faiss.read_index()`.
-- `data/results_<arch>.jsonl` -- one line per query, in the `resultados.jsonl`
-  shape (`documents` top-3, `fragments` top-10, `<=250` words, sentence-safe).
-- `data/summary.json`, `data/timings_*.json` -- indexing cost, query latency,
-  NDCG@10/F1@3 when a confirmed validation set was supplied.
+- `data/chunks.jsonl` -- metadata de los chunks (campos de la Tabla 1 de la
+  spec); el orden de las líneas es el orden de inserción, que también es el
+  orden de los ids internos de FAISS.
+- `<out-dir>/index.faiss`, `<out-dir>/metadata.jsonl` -- el layout de entrega
+  `base_vectorial/encoder_<nombre>/`, cargable con un simple
+  `faiss.read_index()`.
+- `data/results_<arch>.jsonl` -- una línea por query, con la forma de
+  `resultados.jsonl` (`documents` top-3, `fragments` top-10, `<=250`
+  palabras, respetando límites de oración).
+- `data/summary.json`, `data/timings_*.json` -- costo de indexado, latencia
+  de query, NDCG@10/F1@3 cuando se proporcionó un set de validación
+  confirmado.
 
-## Verified on Colab (2026-08-10, T4 session via the `colab` CLI)
+## Verificado en Colab (10-08-2026, sesión T4 vía la CLI de `colab`)
 
-- `selftest`: A/B/C wiring, index persistence round-trip -- pass.
-- `verify`: real e5-large + bge-m3 load, encode, L2-normalize, cross-lingual /
-  sparse sanity -- pass.
-- `build A` + `query A` against a 3-document synthetic corpus: real
-  `index.faiss` + `metadata.jsonl` written; retrieval correctly ranked the
-  space-debris document first for a space-debris query and the AI/defense
-  document first for an AI/defense query.
+- `selftest`: cableado de A/B/C, round-trip de persistencia del índice --
+  correcto.
+- `verify`: carga real de e5-large + bge-m3, encoding, normalización L2,
+  sanidad cross-lingual / sparse -- correcto.
+- `build A` + `query A` contra un corpus sintético de 3 documentos: se
+  escribieron un `index.faiss` + `metadata.jsonl` reales; el retrieval
+  ordenó correctamente el documento de basura espacial primero para una
+  query de basura espacial, y el documento de IA/defensa primero para una
+  query de IA/defensa.
 
-## Relationship to `arch_test/`
+## Relación con `arch_test/`
 
-`arch_test/{chunker,encoders,harness,metrics}.py` remain the 5-architecture
-(A-E) comparison harness that produced the numbers behind the shortlist
-decision -- keep those for the record. This directory is the single-file,
-finalists-only (A/B/C) tool for actually building and querying an index for
-the submission. Nothing under `arch_test/` was deleted or modified when this
-was split out.
+`arch_test/{chunker,encoders,harness,metrics}.py` siguen siendo el harness de
+comparación de 5 arquitecturas (A-E) que produjo los números detrás de la
+decisión de shortlist -- se conservan como registro histórico. Este
+directorio es la herramienta de un solo archivo, solo-finalistas (A/B/C),
+para construir y consultar realmente un índice para la entrega. No se borró
+ni modificó nada bajo `arch_test/` al separar esto.
