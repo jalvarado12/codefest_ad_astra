@@ -36,6 +36,37 @@ if str(_REPO_ROOT) not in sys.path:
 UMBRAL_TEXTO_VACIO = 50   # por debajo de esto, un PDF se considera "sin capa de texto"
 UMBRAL_IMAGEN_SIN_SENAL = 30  # por debajo de esto, una imagen se considera decorativa
 
+# ==============================================================================
+# EasyOCR — reader compartido y perezoso
+# ==============================================================================
+# El modelo de EasyOCR (redes de detección + reconocimiento) tarda varios
+# segundos en cargar, así que se instancia UNA sola vez por combinación de
+# idiomas y se comparte entre PDFExtractor e ImagenExtractor. Crítico: se
+# hace perezosamente en el primer uso real de OCR (no en __init__), porque
+# pipeline.py instancia ambos adaptadores a nivel de módulo (_ADAPTADORES) al
+# importar el paquete — cargar el modelo ahí penalizaría cualquier corpus,
+# incluso uno sin PDFs escaneados ni imágenes.
+_MAPA_IDIOMAS_TESSERACT_A_EASYOCR = {"spa": "es", "eng": "en"}
+_lector_easyocr_cache: dict = {}
+
+
+def _mapear_idiomas_easyocr(idiomas_tesseract: str) -> list[str]:
+    langs = [
+        _MAPA_IDIOMAS_TESSERACT_A_EASYOCR.get(codigo.strip(), codigo.strip())
+        for codigo in idiomas_tesseract.split("+")
+        if codigo.strip()
+    ]
+    return langs or ["es"]
+
+
+def _obtener_lector_easyocr(idiomas: str, gpu: bool = False):
+    langs = tuple(_mapear_idiomas_easyocr(idiomas))
+    if langs not in _lector_easyocr_cache:
+        import easyocr
+
+        _lector_easyocr_cache[langs] = easyocr.Reader(list(langs), gpu=gpu, verbose=False)
+    return _lector_easyocr_cache[langs]
+
 
 class ExtractorBase:
     """Interfaz común de los adaptadores de extracción."""
@@ -55,9 +86,10 @@ class ExtractorBase:
 class PDFExtractor(ExtractorBase):
     extensiones = (".pdf",)
 
-    def __init__(self, idiomas_ocr: str = "spa+eng", dpi_ocr: int = 300):
+    def __init__(self, idiomas_ocr: str = "spa+eng", dpi_ocr: int = 300, gpu_ocr: bool = False):
         self.idiomas_ocr = idiomas_ocr
         self.dpi_ocr = dpi_ocr
+        self.gpu_ocr = gpu_ocr
 
     def extraer(self, file_path: Path) -> str:
         import fitz  # PyMuPDF
@@ -90,9 +122,8 @@ class PDFExtractor(ExtractorBase):
     def _ocr_fallback(self, doc) -> str:
         try:
             import fitz
-            import pytesseract
-            from PIL import Image
-            import io as _io
+
+            lector = _obtener_lector_easyocr(self.idiomas_ocr, gpu=self.gpu_ocr)
         except ImportError:
             return ""
 
@@ -101,9 +132,12 @@ class PDFExtractor(ExtractorBase):
         texto_por_pagina = []
         for page in doc:
             pix = page.get_pixmap(matrix=mat)
-            img = Image.open(_io.BytesIO(pix.tobytes("png")))
             try:
-                texto_por_pagina.append(pytesseract.image_to_string(img, lang=self.idiomas_ocr))
+                # paragraph=True agrupa las líneas detectadas en bloques
+                # coherentes, en vez de devolver una lista de fragmentos
+                # sueltos por línea.
+                resultados = lector.readtext(pix.tobytes("png"), detail=0, paragraph=True)
+                texto_por_pagina.append("\n\n".join(resultados))
             except Exception:
                 texto_por_pagina.append("")
         return "\n\n".join(texto_por_pagina)
@@ -255,15 +289,21 @@ class JSONExtractor(ExtractorBase):
 class ImagenExtractor(ExtractorBase):
     extensiones = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp")
 
-    def __init__(self, idiomas: str = "spa+eng"):
+    def __init__(self, idiomas: str = "spa+eng", gpu_ocr: bool = False):
         self.idiomas = idiomas
+        self.gpu_ocr = gpu_ocr
 
     def extraer(self, file_path: Path) -> str:
-        import pytesseract
-        from PIL import Image
+        try:
+            lector = _obtener_lector_easyocr(self.idiomas, gpu=self.gpu_ocr)
+        except ImportError:
+            return ""
 
-        img = Image.open(file_path)
-        texto = pytesseract.image_to_string(img, lang=self.idiomas)
+        try:
+            resultados = lector.readtext(str(file_path), detail=0, paragraph=True)
+        except Exception:
+            return ""
+        texto = "\n\n".join(resultados)
 
         # Imagen decorativa/sin texto (ej. una foto de portada): se
         # devuelve "" en vez de ruido de OCR sin valor semántico.
