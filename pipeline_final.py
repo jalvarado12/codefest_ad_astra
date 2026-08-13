@@ -377,10 +377,31 @@ def encoder_e5(batch_size=64, log=print):
     tok = model.tokenizer
 
     def encoder(textos):
-        return model.encode(textos, batch_size=batch_size,
+        vectores = model.encode(textos, batch_size=batch_size,
                             normalize_embeddings=True,
                             convert_to_numpy=True,
                             show_progress_bar=False).astype("float32")
+        # El caching allocator de MPS/CUDA no devuelve memoria al sistema
+        # entre llamadas -- la retiene "wired" para reusarla. Sin este
+        # vaciado, 200 documentos de muestra (unas 16 llamadas a este
+        # encoder) inflaron la memoria wired a 5.5GB en una maquina de 8GB
+        # y el kernel empezo a matar procesos idle (jetsam). Medido: al
+        # matar el proceso la memoria wired bajo de 5556M a 1324M, asi que
+        # es el encoder reteniendo cache, no el tamano del corpus.
+        #
+        # Mitigacion parcial, no cura completa: en una segunda corrida,
+        # con este vaciado ya puesto, wired se mantuvo plano ~1.3GB los
+        # primeros ~2 minutos y despues volvio a subir a 4.5GB (72 jetsam
+        # kills mas). empty_cache() libera el allocator pool, pero no
+        # necesariamente el cache de grafos compilados de MPSGraph, que en
+        # teoria puede crecer por cada combinacion nueva de forma/longitud
+        # de secuencia entre batches. En una maquina de 8GB esto no alcanza
+        # por si solo para correr el corpus completo en mps; ver DOCUMENTATION.md.
+        if dev == "mps":
+            torch.mps.empty_cache()
+        elif dev == "cuda":
+            torch.cuda.empty_cache()
+        return vectores
 
     # raw content tokens: chunker.MAX_TOKENS already reserves prefix + specials
     def contar_tokens(texto):
