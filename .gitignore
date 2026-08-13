@@ -9,6 +9,19 @@ doc_registry.json
 _ocr_imagenes_txt/
 log_ocr.txt
 
+# Artefactos del pipeline (regenerables; ver specs/02-migration.md)
+cache/
+vectors/
+entrega/
+
+# Scratch de la corrida OCR en Colab y shims del CLI en Windows
+_ocrjob/
+_ocrjob_pdfs.zip
+_winshim/
+
+# Worktrees de agentes
+.claude/
+
 # Python
 __pycache__/
 *.pyc
