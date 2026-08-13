@@ -24,6 +24,7 @@ import csv
 import difflib
 import io
 import json
+import logging
 import re
 import unicodedata
 from collections import Counter, defaultdict
@@ -187,6 +188,24 @@ def inferir_fenomeno(ruta_relativa: Path) -> int | None:
 _MAPA_IDIOMAS_TESSERACT_A_EASYOCR = {"spa": "es", "eng": "en"}
 _lector_easyocr_cache: dict = {}
 
+# canvas_size: tope que EasyOCR aplica al lado mayor de la imagen ANTES de
+# correr el detector CRAFT (default de la librería: 2560). batch_size: cuántos
+# recortes de texto detectados se procesan juntos en el reconocedor -- con
+# batch_size=1 (default de la librería) o device=='cpu', easyocr.py:378 fuerza
+# un for-loop que llama al reconocedor una caja de texto a la vez, cada una
+# con su propio commit/sync de device. Ambos medidos y confirmados contra
+# el código instalado de EasyOCR, no supuestos.
+OCR_CANVAS_SIZE = 1280
+OCR_BATCH_SIZE = 16
+# workers=0: medido A/B contra el mismo lector y las mismas páginas --
+# workers=2 dio 20.88s/pagina vs 2.75s/pagina con workers=0 (7.6x peor).
+# DataLoader(num_workers>0) usa spawn en macOS, no fork; readtext() se llama
+# una vez POR PÁGINA, así que cada página paga el arranque completo de
+# subprocesos nuevos por un puñado de recortes de texto -- el overhead de
+# arranque nunca se amortiza. No reintroducir sin remedir en este corpus.
+OCR_WORKERS = 0
+OCR_MAX_LADO_PX = 2000
+
 
 def _mapear_idiomas_easyocr(idiomas_tesseract: str) -> list[str]:
     langs = [
@@ -202,7 +221,12 @@ def _obtener_lector_easyocr(idiomas: str, gpu: bool = False):
     if langs not in _lector_easyocr_cache:
         import easyocr
 
-        _lector_easyocr_cache[langs] = easyocr.Reader(list(langs), gpu=gpu, verbose=False)
+        lector = easyocr.Reader(list(langs), gpu=gpu, verbose=False)
+        logging.warning(
+            "EasyOCR: hardware real en uso -> device=%s (gpu solicitado=%s)",
+            lector.device, gpu,
+        )
+        _lector_easyocr_cache[langs] = lector
     return _lector_easyocr_cache[langs]
 
 
@@ -221,10 +245,12 @@ class ExtractorBase:
 class PDFExtractor(ExtractorBase):
     extensiones = (".pdf",)
 
-    def __init__(self, idiomas_ocr: str = "spa+eng", dpi_ocr: int = 300, gpu_ocr: bool = False):
+    def __init__(self, idiomas_ocr: str = "spa+eng", dpi_ocr: int = 150, gpu_ocr: bool = True,
+                 batch_size: int = OCR_BATCH_SIZE):
         self.idiomas_ocr = idiomas_ocr
         self.dpi_ocr = dpi_ocr
         self.gpu_ocr = gpu_ocr
+        self.batch_size = batch_size
 
     def extraer(self, file_path: Path) -> str:
         import fitz  # PyMuPDF
@@ -256,13 +282,27 @@ class PDFExtractor(ExtractorBase):
         except ImportError:
             return ""
 
-        zoom = self.dpi_ocr / 72
-        mat = fitz.Matrix(zoom, zoom)
+        zoom_base = self.dpi_ocr / 72
         texto_por_pagina = []
         for page in doc:
-            pix = page.get_pixmap(matrix=mat)
+            # tope de resolución calculado desde el tamaño real de la página,
+            # para nunca renderizar (ni codificar a PNG) más píxeles de los
+            # que EasyOCR va a usar -- en vez de renderizar grande y recortar.
+            zoom = zoom_base
+            lado_mayor_pt = max(page.rect.width, page.rect.height)
+            if lado_mayor_pt * zoom > OCR_MAX_LADO_PX:
+                zoom = OCR_MAX_LADO_PX / lado_mayor_pt
+
+            pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom))
             try:
-                resultados = lector.readtext(pix.tobytes("png"), detail=0, paragraph=True)
+                resultados = lector.readtext(
+                    pix.tobytes("png"),
+                    detail=0,
+                    paragraph=True,
+                    canvas_size=OCR_CANVAS_SIZE,
+                    batch_size=self.batch_size,
+                    workers=OCR_WORKERS,
+                )
                 texto_por_pagina.append("\n\n".join(resultados))
             except Exception:
                 texto_por_pagina.append("")
@@ -392,9 +432,11 @@ class JSONExtractor(ExtractorBase):
 class ImagenExtractor(ExtractorBase):
     extensiones = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp")
 
-    def __init__(self, idiomas: str = "spa+eng", gpu_ocr: bool = False):
+    def __init__(self, idiomas: str = "spa+eng", gpu_ocr: bool = True,
+                 batch_size: int = OCR_BATCH_SIZE):
         self.idiomas = idiomas
         self.gpu_ocr = gpu_ocr
+        self.batch_size = batch_size
 
     def extraer(self, file_path: Path) -> str:
         try:
@@ -403,7 +445,14 @@ class ImagenExtractor(ExtractorBase):
             return ""
 
         try:
-            resultados = lector.readtext(str(file_path), detail=0, paragraph=True)
+            resultados = lector.readtext(
+                str(file_path),
+                detail=0,
+                paragraph=True,
+                canvas_size=OCR_CANVAS_SIZE,
+                batch_size=self.batch_size,
+                workers=OCR_WORKERS,
+            )
         except Exception:
             return ""
         texto = "\n\n".join(resultados)

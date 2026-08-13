@@ -357,12 +357,21 @@ def encoder_e5(batch_size=64, log=print):
     import torch
     from sentence_transformers import SentenceTransformer
 
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        dev = "cuda"
+    elif torch.backends.mps.is_available():
+        dev = "mps"
+    else:
+        dev = "cpu"
     log(f"   cargando {E5_ID} @ {E5_REV[:8]} en {dev}")
 
     model = SentenceTransformer(E5_ID, revision=E5_REV, device=dev)
     model.max_seq_length = 512
-    if dev == "cuda":
+    if dev in ("cuda", "mps"):
+        # fp32 + batch_size=64 midio un OOM real del backend MPS en una
+        # maquina de 8GB (Insufficient Memory, kIOGPUCommandBufferCallback-
+        # ErrorOutOfMemory) que deja el proceso colgado sin recuperarse.
+        # fp16 a la misma batch_size=64 corrio limpio, medido.
         model = model.half()
 
     tok = model.tokenizer
@@ -398,16 +407,21 @@ def ejecutar(corpus, out="entrega", cache="cache", vectors="vectors",
         inventario = cargar_inventario(inventario_path)
         log(f"== inventario: {len(inventario)} filas ==")
 
-    dev = "n/a"
-    if encoder is None:
-        log("== encoder ==")
-        encoder, contar_tokens, dev = encoder_e5(batch_size, log)
-
     log("== extraccion ==")
     documentos, stats_ext = extraer_corpus(
         corpus, cache_dir / "textos.jsonl", inventario, sample, rebuild,
         errores, log)
     log(f"   {stats_ext}")
+
+    # el encoder se carga DESPUES de extraccion, no antes: extraccion incluye
+    # OCR (EasyOCR en GPU/MPS), y tener e5-large ya residente en la misma
+    # memoria unificada durante el OCR crea contencion GPU/RAM medida en
+    # produccion -- una pagina que aislada tarda 2.5-6.5s se colgo mas de
+    # 9 minutos con ambos modelos cargados a la vez en una maquina de 8GB.
+    dev = "n/a"
+    if encoder is None:
+        log("== encoder ==")
+        encoder, contar_tokens, dev = encoder_e5(batch_size, log)
 
     log("== chunking ==")
     chunks, sin_chunks, stats_chunk = chunkear(documentos, contar_tokens, log)
