@@ -129,10 +129,17 @@ extracción, no antes: tener e5-large ya cargado durante el OCR generó
 contención GPU/RAM medida (una página de 2.5–6.5s tardó más de 9 minutos con
 ambos modelos en memoria a la vez).
 
+Con este tuning, la extracción del corpus completo (~1.835 archivos, todos los
+formatos, OCR incluido) bajó a **22 minutos totales**, contra el estimado
+previo de 69.5 minutos solo para el OCR de las 613 páginas escaneadas. El
+resultado queda en `cache/textos.jsonl`.
+
 ## Pendiente
 
 - `informe_tecnico.pdf` — es calificado, y §3.2 exige justificar explícitamente
   la estrategia de chunking.
-- Corrida sobre el corpus completo y su validación: lo medido en
-  `DOCUMENTATION.md` es sobre una muestra estratificada de 25 archivos.
+- Chunking, encoding e indexación sobre el corpus completo: la extracción ya
+  corrió completa, pero lo demás (conteo de chunks, retrieval, la tabla
+  25→475 chunks) sigue medido solo sobre la muestra estratificada de 25
+  archivos en `DOCUMENTATION.md`.
 - Grafo de conocimiento (componente bonus).

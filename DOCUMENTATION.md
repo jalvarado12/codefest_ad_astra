@@ -868,8 +868,15 @@ splits on `"\n\n"`, so every tabular file collapsed into a single block.
 strategy a hard requirement. Note that §3.2 requires the *hybrid* strategy be justified
 explicitly, which now includes the dual cap and the escalera.
 
-**A full-corpus run.** Everything above is measured on a 25-file stratified sample. The full
-corpus is not present on the development machine.
+**A full-corpus run, measured end to end for extraction.** After the OCR tuning above (§5.1:
+`canvas_size`, lower `dpi_ocr`, `workers=0`, the page-size render cap), a full-corpus extraction
+run — all ~1,835 files, every format, OCR included — completed in **22 minutes total**, down
+from the pre-tuning full-coverage OCR-only estimate of 69.5 minutes for just the 613 scanned
+pages (§5.1, §8). This is the first full-corpus number in this document; everything else below
+(chunk counts, retrieval behaviour, the 25→475-chunk sample tables) is still measured on the
+25-file stratified sample and has not yet been re-run at full scale. Re-measuring chunking,
+encoding and retrieval end to end on the full extraction output is what remains — see §12,
+blocking item 2.
 
 ---
 
@@ -1098,18 +1105,25 @@ and **2.43** for Spanish. That ratio is the whole reason the word cap alone was 
 
 ## 12. Before delivery — the remaining gates
 
-Everything measured in this document is a **25-file stratified sample**. The corpus is 1,826
-files and is not on the development machine. That single fact orders most of what follows.
+Most of what is measured in this document is still a **25-file stratified sample**; the corpus
+(1,826 rows in the inventory) is now present on the development machine and extraction has been
+run against it in full (§8, "Does not exist yet" → full-corpus extraction, 22 minutes). Chunking,
+encoding and retrieval have not yet been re-run at full scale, which is what most of the
+remaining blockers below are about.
 
 ### Blocking — the delivery cannot be produced without these
 
-**1. Get the corpus onto a machine that can run it.** Nothing below can start otherwise.
+**1. ~~Get the corpus onto a machine that can run it.~~ Done.** The corpus is on the development
+machine and a full-corpus extraction has completed (22 minutes, all formats, OCR included, after
+the tuning in §5.1). `cache/textos.jsonl` now holds the full-corpus extraction output.
 
-**2. Run `pipeline_final.py --sample N` on the real corpus before the full pass.** Two of the
-four rows in the index-composition table (§9, debt 1) are *assumed* at 250 words per chunk, not
-measured — PDF and JSON. Tabular already broke that assumption badly (178 w/chunk, not 250). If
-prose breaks it too, the index is larger than the projected ~136,500 chunks and the encode
-budget is wrong. Measuring costs minutes; discovering it after a full encode costs the run.
+**2. Run `pipeline_final.py --sample N` on the real corpus before the full chunk/encode pass.**
+Two of the four rows in the index-composition table (§9, debt 1) are *assumed* at 250 words per
+chunk, not measured — PDF and JSON. Tabular already broke that assumption badly (178 w/chunk,
+not 250). If prose breaks it too, the index is larger than the projected ~136,500 chunks and the
+encode budget is wrong. Extraction being done removes one variable, but chunking and encoding at
+full scale are still unmeasured. Measuring costs minutes; discovering it after a full encode
+costs the run.
 
 **3. Decide the tabular policy from those numbers.** Tabular projects to ~69% of the index, and
 one CSV alone to ~29%. The lever is already plumbed — `formato` is in the metadata, so a
