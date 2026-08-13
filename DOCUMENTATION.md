@@ -23,6 +23,7 @@ in the pipeline, and to find the weak spots without being told where they are.
 9. [Technical debt, with reasons](#9-technical-debt-with-reasons)
 10. [How to run everything](#10-how-to-run-everything)
 11. [Glossary](#11-glossary)
+12. [Before delivery — the remaining gates](#12-before-delivery--the-remaining-gates)
 
 ---
 
@@ -708,6 +709,9 @@ The indexing pipeline is **not** part of the delivery. Only these four items are
 unexpected extra file in a validated tree is risk without reward. The pipeline is described in
 the technical report instead, which is exactly what §1.4 item 3 asks for.
 
+For what still has to happen before this tree can be produced for real, see
+§12, [Before delivery](#12-before-delivery--the-remaining-gates).
+
 ---
 
 ## 8. Current state
@@ -1039,5 +1043,74 @@ product.
 
 **OCR** — optical character recognition; reading text from an image of a page.
 
-**Token** — the sub-word unit an encoder actually counts. Roughly 1.3 tokens per word. The
-encoder ceiling is 512.
+**Token** — the sub-word unit an encoder actually counts. The encoder ceiling is 512, of which
+506 are usable after the `"passage: "` prefix and the two special tokens.
+
+Measured for this model, **not** the ~1.3 tokens/word rule of thumb: about **1.54** for English
+and **2.43** for Spanish. That ratio is the whole reason the word cap alone was insufficient —
+250 Spanish words is roughly 600 tokens, comfortably past the ceiling.
+
+---
+
+## 12. Before delivery — the remaining gates
+
+Everything measured in this document is a **25-file stratified sample**. The corpus is 1,826
+files and is not on the development machine. That single fact orders most of what follows.
+
+### Blocking — the delivery cannot be produced without these
+
+**1. Get the corpus onto a machine that can run it.** Nothing below can start otherwise.
+
+**2. Run `pipeline_final.py --sample N` on the real corpus before the full pass.** Two of the
+four rows in the index-composition table (§9, debt 1) are *assumed* at 250 words per chunk, not
+measured — PDF and JSON. Tabular already broke that assumption badly (178 w/chunk, not 250). If
+prose breaks it too, the index is larger than the projected ~136,500 chunks and the encode
+budget is wrong. Measuring costs minutes; discovering it after a full encode costs the run.
+
+**3. Decide the tabular policy from those numbers.** Tabular projects to ~69% of the index, and
+one CSV alone to ~29%. The lever is already plumbed — `formato` is in the metadata, so a
+post-filter or a per-format cap on the ten fragments is a few lines. **This decision is cheap
+before the full encode and expensive after it.**
+
+**4. Rehearse the resume path on real volume.** `pipeline_final selftest` covers resume against
+a *simulated* kill with three chunks. It has never faced a real Colab disconnect at 100k chunks
+across multiple checkpoint flushes — and Colab sessions do vanish; two runs were lost that way.
+Kill a real run deliberately at ~30% and resume it. This is the difference between losing twenty
+minutes and losing the run.
+
+**5. `informe_tecnico.pdf`.** Graded, not started, ≤8 pages. §3.2 requires the chunking strategy
+be justified *explicitly*, and the strategy is now a hybrid — paragraph packing, sentence
+granularity, a dual word/token cap, the five-level escalera, and prose-only overlap. More to
+justify than when that requirement was written, not less. §5.5 and §9 are the raw material.
+
+**6. Produce and validate the delivery tree.** Exactly the four items in §7, nothing extra:
+`resultados.jsonl`, `generador.py`, `informe_tecnico.pdf`, `base_vectorial/`. Then
+`python _gentest/validate_resultados.py` against it, and `python generador.py selftest`, whose
+check 11 runs the delivery standalone from an empty directory with no repository imports. §1.4
+is pass/fail: *"Si no es posible reproducir los resultados, se excluirá de la evaluación."*
+
+### Not blocking, but each is a known cost
+
+**7. Chunk-text deduplication in the fragment walk.** Overlap means adjacent chunks share a
+sentence and score similarly, so both can occupy fragment slots and one is spent on a repeat.
+`generador._fragmentos_de` deduplicates nothing at chunk level. A few lines, but the threshold
+is a tuning call and an over-eager filter drops legitimately distinct fragments.
+
+**8. Prune the escalera.** Levels 4 (single newlines) and 5 (commas) have never fired. Step 1
+item 4 says delete levels that never fire; 25 files is too thin to retire them on.
+`run_manifest.json` records the counters on every run — decide from the full-corpus numbers.
+
+**9. Strip running headers in extraction.** `remove_repeated_lines` cannot see a header carrying
+a page number, because the number makes each occurrence unique. ~2% of prose chunks open with
+one. Cosmetic for compliance, real for retrieval quality; the fix touches every PDF, so it needs
+its own measurement rather than a guess.
+
+**10. Sweep `OVERLAP_ORACIONES` and `MAX_WORDS`** once there is ground truth. Cache 2 keys on
+chunk text, so each sweep re-encodes only what moved. See §5.5, *"Is the overlap right?"*.
+
+### Already closed
+
+`requirements.txt` pinned with the model revision recorded; `chunker.py` stripped to chunking
+only; extraction row-joins, one-document-per-`.pbf`, language, `adl_doc_id` and `catalogo_*`;
+inventory reconciliation; `pipeline_final.py` with both caches, resume and manifest;
+`generador.py`; overlap; and a full end-to-end T4 run producing a **VALID** `resultados.jsonl`.
