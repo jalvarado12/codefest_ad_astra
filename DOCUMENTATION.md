@@ -301,6 +301,14 @@ Applied to every adapter's output:
 Step 3 is why PDF extraction uses block mode: headers become their own blocks, repeat
 identically, and get stripped automatically.
 
+**Where step 3 fails, measured.** A running header that carries a page number is *not* an
+identical repeat — `"cross-cutting considerations 21"` and `"cross-cutting considerations 22"`
+are two distinct lines, each seen once, so a header appearing on 30 pages never reaches the
+`min_repeats=3` threshold and survives into the text. It shows up as ~2% of prose chunks opening
+with a lowercase header line. Stripping a trailing page number before counting would collapse
+them; that is not done yet, because an over-eager rule would eat real content and the change
+touches every PDF in the corpus. Cosmetic for compliance, real for retrieval quality.
+
 ### 5.3 The catalog problem
 
 Twenty of the JSON files are not documents at all — they are the scraper's own bookkeeping:

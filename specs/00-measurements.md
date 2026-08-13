@@ -244,6 +244,39 @@ falls back to the CSV ratio for other tabular formats.
 **VALID** against §9.3.1/§9.3.2 — the schema holds. The validator's sanity check fires though:
 one document takes rank 1 on 26 of 50 queries. Tabular chunks retrieve; they discriminate badly.
 
+### Conditions re-verified with overlap enabled — 2026-08-13
+
+Sample corpus, real extraction, `OVERLAP_ORACIONES = 1`:
+
+| | no overlap | overlap |
+|---|---|---|
+| chunks | 475 | **531** (+11.8%) |
+| tokens p50 / p95 / p99 / max | 357 / 443 / 499 / 504 | 357 / 443 / 489 / **504** |
+| chunks over the 506 cap | 0 | **0** |
+| words p50 / p95 / max | 229 / 248 / 250 | 229 / 249 / **250** |
+| chunks over the §9.2 250 cap | 0 | **0** |
+| escalera residue | 0 | **0** |
+
++11.8% lands inside the "~10–20% on prose" the plan budgeted. Overlap placement is exactly as
+specified: **354 prose chunk boundaries carry the previous sentence, 0 tabular ones do.**
+
+**§3.3 spot check.** 8 of 449 prose chunks (1.8%) open with a lowercase letter. Every one was
+inspected:
+
+- **7 are PDF running headers** — `"conclusions and recommendations 33\nContinue hydrocarbon…"`,
+  `"cross-cutting considerations 21\nExperience-sharing…"`. Complete header lines, not broken
+  sentences. No §3.3 issue.
+- **1 is an escalera clause piece**, which §3.3 permits on its own wording: it forbids
+  *"oraciones o frases incompletas"*, and a clause ending at `;`/`:` is a complete *frase* —
+  the same argument Step 1 item 4 uses to make clauses level 2 of the ladder.
+
+**New extraction debt, found by that check.** `remove_repeated_lines` never strips those running
+headers, because the page number makes each occurrence unique: a header repeating on 30 pages is
+30 distinct lines, each seen once, so it never reaches the `min_repeats=3` threshold. Stripping a
+trailing page number before counting would collapse them and remove the lot. Not fixed — it
+touches every PDF and deserves its own measurement, since an over-eager rule would eat real
+content. Cosmetic for compliance, real for retrieval quality.
+
 ---
 
 ## 6. Sentence-length distribution — does a real >250-word sentence exist?
