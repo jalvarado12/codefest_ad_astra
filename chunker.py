@@ -37,6 +37,17 @@ MAX_WORDS = 250
 # no prefix and no special tokens.
 MAX_TOKENS = 506
 
+# Decision 2: seed each chunk with the last N complete sentences of the previous
+# one, so an answer straddling a chunk boundary is retrievable from both sides.
+# The overlap counts toward both caps and must be whole sentences (§3.3), which
+# is free here because the packer's units already are.
+OVERLAP_ORACIONES = 1
+
+# ...but not for tabular formats. Rows are independent records; repeating one
+# adds no context, and tabular content is already projected to dominate the
+# index. §3.2 permits the hybrid, it does not require applying it uniformly.
+FORMATOS_SIN_OVERLAP = frozenset({"csv", "xlsx", "pbf"})
+
 
 
 # BLOCK SEPARATION
@@ -261,20 +272,56 @@ def _unidades(bloques, tokens_de):
     return unidades
 
 
-def generar_chunks(bloques, contar_tokens=None):
+# A unit that ends in sentence-final punctuation. Only these may be carried as
+# overlap: an escalera piece is a fragment of an unsplittable unit, and seeding
+# the next chunk with one would open it mid-sentence.
+_FIN_UNIDAD = re.compile(r'[.!?…]["»”\'’)\]]*$')
+
+
+def _semilla(actuales, overlap, siguiente):
+    """The trailing units to carry into the next chunk.
+
+    Contiguous and sentence-final, and trimmed from the front until the seed
+    plus the unit that just overflowed both fit -- otherwise the overlap would
+    push that unit out again and the packer would make no progress.
+    """
+    if overlap <= 0 or not actuales:
+        return []
+
+    if not _FIN_UNIDAD.search(actuales[-1]["texto"]):
+        return []
+
+    cand = list(actuales[-overlap:])
+
+    while cand:
+        palabras = sum(u["n_words"] for u in cand) + siguiente["n_words"]
+        tokens = sum(u["n_tokens"] for u in cand) + siguiente["n_tokens"]
+
+        if palabras <= MAX_WORDS and tokens <= MAX_TOKENS:
+            break
+
+        cand.pop(0)
+
+    return cand
+
+
+def generar_chunks(bloques, contar_tokens=None, overlap=0):
     """
     Pack blocks into chunks under both caps at once.
 
     Returns [{texto, n_words, num_tokens}]; identity fields are stamped by
     procesar_documento. A sentence is never split across two chunks.
+
+    `overlap` carries that many trailing sentences into the next chunk
+    (Decision 2). It counts toward both caps, so it costs index size rather
+    than correctness.
     """
     tokens_de = _contador(contar_tokens)
     unidades = _unidades(bloques, tokens_de)
 
     chunks = []
 
-    piezas = []
-    origen = []
+    actuales = []
     palabras = 0
     tokens = 0
 
@@ -285,7 +332,8 @@ def generar_chunks(bloques, contar_tokens=None):
     # candidate string if chunk sizes ever need to be tight.
     def cerrar():
         chunks.append({
-            "texto": _unir(piezas, origen),
+            "texto": _unir([u["texto"] for u in actuales],
+                           [u["bloque"] for u in actuales]),
             "n_words": palabras,
             "num_tokens": tokens,
         })
@@ -296,17 +344,17 @@ def generar_chunks(bloques, contar_tokens=None):
             or tokens + unidad["n_tokens"] > MAX_TOKENS
         )
 
-        if desborda and piezas:
+        if desborda and actuales:
             cerrar()
-            piezas, origen = [], []
-            palabras = tokens = 0
+            actuales = _semilla(actuales, overlap, unidad)
+            palabras = sum(u["n_words"] for u in actuales)
+            tokens = sum(u["n_tokens"] for u in actuales)
 
-        piezas.append(unidad["texto"])
-        origen.append(unidad["bloque"])
+        actuales.append(unidad)
         palabras += unidad["n_words"]
         tokens += unidad["n_tokens"]
 
-    if piezas:
+    if actuales:
         cerrar()
 
     return chunks
@@ -314,7 +362,7 @@ def generar_chunks(bloques, contar_tokens=None):
 
 
 # DOCUMENT PROCESSING
-def procesar_documento(registro, contar_tokens=None):
+def procesar_documento(registro, contar_tokens=None, overlap=None):
     """
     Chunk one extracted document.
 
@@ -323,6 +371,9 @@ def procesar_documento(registro, contar_tokens=None):
 
     Optional fields are carried through when present: `idioma` and any
     `catalogo_*` scalars flattened by extraction (Decision 12).
+
+    `overlap` defaults to OVERLAP_ORACIONES for prose and 0 for csv/xlsx/pbf.
+    Pass an explicit integer to override, including 0 to disable.
 
     Returns the document summary plus its chunks, each carrying the eight
     Tabla-1 fields. `num_tokens` is real when contar_tokens is supplied and 0
@@ -339,8 +390,11 @@ def procesar_documento(registro, contar_tokens=None):
     if registro.get("idioma") is not None:
         extra["idioma"] = registro["idioma"]
 
+    if overlap is None:
+        overlap = 0 if formato in FORMATOS_SIN_OVERLAP else OVERLAP_ORACIONES
+
     bloques = separar_bloques(texto)
-    chunks = generar_chunks(bloques, contar_tokens)
+    chunks = generar_chunks(bloques, contar_tokens, overlap)
 
     for i, chunk in enumerate(chunks):
         chunk.update(extra)
@@ -453,6 +507,51 @@ def _demo():
     assert doc["chunks"][0]["nombre_archivo"] == "t.csv"
     assert [c["posicion"] for c in doc["chunks"]] == list(range(doc["n_chunks"]))
     assert doc["chunks"][7]["chunk_id"] == "DOC-0001-chunk-00007"
+
+    # -- overlap (Decision 2) ------------------------------------------------
+    frases = [f"Frase numero {i} con relleno suficiente para pesar algo."
+              for i in range(60)]
+    prosa = [" ".join(frases)]
+
+    sin = generar_chunks(prosa, overlap=0)
+    con = generar_chunks(prosa, overlap=1)
+
+    # overlap duplicates text, so the total grows; the chunk count need not,
+    # since one repeated sentence rarely tips a chunk over on its own
+    assert sum(c["n_words"] for c in con) > sum(c["n_words"] for c in sin), \
+        (sum(c["n_words"] for c in sin), sum(c["n_words"] for c in con))
+    assert len(con) >= len(sin), (len(sin), len(con))
+    assert all(c["n_words"] <= MAX_WORDS for c in con), \
+        [c["n_words"] for c in con]
+
+    # each chunk after the first opens with the previous chunk's last sentence
+    for previo, actual in zip(con, con[1:]):
+        ultima = separar_oraciones(previo["texto"])[-1]
+        assert actual["texto"].startswith(ultima), \
+            (ultima[:60], actual["texto"][:60])
+
+    # the overlap repeats text but loses none of it
+    for f in frases:
+        assert any(f in c["texto"] for c in con), f
+
+    # tabular formats get no overlap, prose does, by default
+    tabla = "\n\n".join(f"Year: {2000+i} | Count: {i}." for i in range(200))
+    doc_csv = procesar_documento({"doc_id": "D", "fuente": "a.csv",
+                                  "formato": "csv", "fenomeno": 1,
+                                  "texto_limpio": tabla})
+    doc_pdf = procesar_documento({"doc_id": "D", "fuente": "a.pdf",
+                                  "formato": "pdf", "fenomeno": 1,
+                                  "texto_limpio": prosa[0]})
+    sin_csv = procesar_documento({"doc_id": "D", "fuente": "a.csv",
+                                  "formato": "csv", "fenomeno": 1,
+                                  "texto_limpio": tabla}, overlap=0)
+    assert doc_csv["n_chunks"] == sin_csv["n_chunks"], "csv must not overlap"
+    assert doc_pdf["n_chunks"] == len(con), "pdf must overlap by default"
+
+    # a non-sentence-final unit is never carried: the escalera piece below has
+    # no terminator, so seeding on it would open a chunk mid-sentence
+    pieza = {"texto": "sin terminador", "n_words": 2, "n_tokens": 2, "bloque": 0}
+    assert _semilla([pieza], 1, pieza) == []
 
     # -- optional passthrough ------------------------------------------------
     con_extra = procesar_documento({"doc_id": "DOC-0002", "fuente": "x.pdf",

@@ -254,8 +254,22 @@ anything per query id.
 
 ### B4. Overlap and `MAX_WORDS` sweep
 
-Both are single parameters, both invalidate cache 2 cleanly by fingerprint, and re-chunking is
-milliseconds. The cheapest experiments available — but meaningless without a relevance signal.
+Both are single parameters and re-chunking is milliseconds. The cheapest experiments available
+— but meaningless without a relevance signal.
+
+**Updated 2026-08-13.** Overlap is now *built* (`OVERLAP_ORACIONES = 1`, prose only); what stays
+open is the number, not the mechanism. 1 is the conservative end of Decision 2's "1–2".
+
+Correction: cache 2 no longer has a fingerprint. It keys on `sha256` of the chunk text, so a
+parameter change re-encodes exactly the chunks whose text moved and reuses the rest — which is
+precisely what makes these sweeps affordable rather than a full re-encode each time.
+
+Two things to weigh when the sweep finally happens:
+
+- Overlap inflates the index. At the measured tabular ratio the index is already ~136,500
+  chunks; overlap adds to the prose share on top of that.
+- Overlap lets two retrieved fragments carry the same sentence, wasting slots out of the ten.
+  `generador` does not deduplicate fragment text. Worth measuring before raising the number.
 
 ### B5. Sub-fragment selection
 

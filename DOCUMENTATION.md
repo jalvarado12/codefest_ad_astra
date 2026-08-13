@@ -417,6 +417,34 @@ fragments at 250 and §9.2.1 requires the split respect §3.3 — impossible whe
 internal sentence boundary. The spec contradicts itself there; §3.3 yields because §9.2 is the
 mechanically graded one. No such case was found in the corpus.
 
+**Overlap.** Each chunk is seeded with the last `OVERLAP_ORACIONES` complete sentences of the
+previous one. An answer that straddles a chunk boundary is otherwise split across two vectors
+and retrieves poorly from both; the overlap makes it whole on at least one side.
+
+Three properties make this safe rather than merely helpful:
+
+- **Whole sentences only.** The unit carried across is already a complete sentence, so §3.3
+  holds by construction. A unit produced by the escalera has no sentence terminator and is
+  never carried — seeding on one would open the next chunk mid-sentence.
+- **It counts toward both caps.** The overlap is paid for out of the 250-word and 506-token
+  budgets, not added on top, so no chunk grows past either.
+- **The seed is trimmed until the overflowing sentence still fits.** Otherwise the carried text
+  would push that sentence out again and the packer would loop without progressing.
+
+**Not applied to `csv`, `xlsx` or `pbf`.** Rows are independent records; repeating one carries
+no context into the next chunk, and tabular content is already projected to dominate the index.
+§3.2 permits the hybrid strategy, it does not require applying it uniformly — but it does
+require the choice be justified explicitly in the technical document, which is what this
+paragraph is for.
+
+**The cost overlap introduces, stated plainly.** Two adjacent chunks now share a sentence. If
+both are retrieved for the same question, two of the ten fragment slots carry overlapping text —
+permitted by §9.3.1, which says nothing about duplication, but wasteful, and it can only hurt
+NDCG@10. `generador._fragmentos_de` deduplicates nothing at chunk level today. The remedy is a
+few lines (skip a fragment whose text is already substantially present in an earlier one), but
+it is a retrieval-quality tradeoff with no ground truth to tune against, so it is recorded here
+rather than guessed at.
+
 ### 5.6 Embedding
 
 Model: **`intfloat/multilingual-e5-large`**, pinned to revision
@@ -768,19 +796,46 @@ corpus is not present on the development machine.
 
 Ordered by likely cost to the score. Every item is a deliberate decision, not an oversight.
 
-**1. Tabular content would be 61% of the index.** 30 CSV/XLSX files hold 16.7 million words →
-about 67,000 of ~110,000 chunks. One CSV alone is ~26% of the whole index. Row text competes
-with prose for every result slot.
-*Decision: index them for now, measure the damage after the first real run.* If tabular chunks
-crowd out prose, a `formato` post-filter is one line, since the field is already in the
-metadata.
+**1. Tabular content will be ~69% of the index — MEASURED, and worse than projected.**
 
-**2. No chunk overlap. [STILL OPEN]** Chunks are cut at sentence boundaries with nothing
-carried across. An answer that straddles a boundary retrieves poorly. Overlap is the most
-common recall win in retrieval systems and §3.2 explicitly permits it.
-*Decision: implement 1–2 sentences of overlap on prose formats only* — repeating CSV rows would
-add nothing and inflate an already table-heavy index. Not built; it is a single parameter and
-re-chunking is milliseconds, but it is meaningless to tune without a relevance signal.
+The projection was 61% (about 67,000 of ~110,000 chunks), computed by dividing 16.7 million
+tabular words by the 250-word cap. That assumed the word cap binds. It does not: dense
+`columna: valor | columna: valor` rows hit the **506-token cap first**, so a tabular chunk holds
+about **178 words**, not 250. Measured on the sample CSVs and reprojected:
+
+| format | words | w/chunk | chunks | share |
+|---|---|---|---|---|
+| csv | 16,523,437 | 178.2 *(measured)* | 92,724 | 67.9% |
+| pdf | ~9,500,000 | 250 *(assumed)* | 38,000 | 27.8% |
+| json | ~1,150,000 | 250 *(assumed)* | 4,600 | 3.4% |
+| xlsx | 208,564 | 178.2 *(csv ratio)* | 1,170 | 0.9% |
+| **total** | | | **~136,500** | |
+| **tabular** | | | **93,894** | **68.8%** |
+
+So the index is ~24% larger than planned and more table-dominated. **One CSV holds 7.1M words —
+about 40,000 chunks, roughly 29% of the entire index on its own.** The PDF and JSON rows are
+still extrapolations at 250 w/chunk and will come in higher too, since prose now carries
+overlap; that moves the tabular *share* down somewhat but the absolute count up.
+
+Retrieval on a 100%-tabular index was tested directly: `resultados.jsonl` is **VALID** against
+§9.3.1/§9.3.2, so nothing about the schema breaks. But the validator's own sanity check fires —
+`one document dominates rank 1` on 26 of 50 queries. Tabular chunks are retrievable; they are
+just poor at discriminating between questions.
+
+*Decision stands: index them, and decide with the full-corpus numbers.* The remedy is cheap and
+already plumbed — `formato` is in the metadata, so a post-filter or a per-format cap on the ten
+fragments is a few lines. What is **not** cheap is discovering it after the full encode, which
+is why this was measured before it.
+
+**2. Chunk overlap. [BUILT]** One complete sentence is carried into each following chunk on
+prose formats; `csv`, `xlsx` and `pbf` get none. See §5.5 for why each of those two halves is
+the way it is.
+
+What remains open is not the mechanism but the **number**. `OVERLAP_ORACIONES` is 1 because 1
+is the smaller of the "1–2 sentences" the decision allowed, and there is no relevance signal to
+justify 2. Both it and `MAX_WORDS` are single parameters that invalidate cache 2 cleanly by
+text hash, so sweeping them is cheap — and meaningless until there is something to measure
+against.
 
 **3. Block classification is crude. [FIXED]** The chunker labelled any block of ≤10 words a
 title, so `"El riesgo es alto."` became a section header — and a single-block CSV made a

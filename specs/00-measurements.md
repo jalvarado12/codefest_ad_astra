@@ -218,6 +218,32 @@ Projected total ~110,000 chunks: ~66,900 tabular (61%), ~38,000 PDF (35%), ~4,60
 plus ~15% on prose from overlap. **The per-format chunk projections for PDF and JSON are
 extrapolations from the samples in §4, not measurements.**
 
+### Reprojected 2026-08-13 — the 250 w/chunk assumption was wrong for tabular
+
+The figures above divide by 250, assuming the word cap binds. Measured with the dual-cap
+chunker (`_gentest/composicion.py`), it does not: dense `columna: valor | columna: valor` rows
+reach the **506-token cap first**, so a tabular chunk holds **178.2 words**, not 250.
+
+| format | words | w/chunk | chunks | share |
+|---|---|---|---|---|
+| csv | 16,523,437 | 178.2 **measured** | 92,724 | 67.9% |
+| pdf | ~9,500,000 | 250 *assumed* | 38,000 | 27.8% |
+| json | ~1,150,000 | 250 *assumed* | 4,600 | 3.4% |
+| xlsx | 208,564 | 178.2 *csv ratio* | 1,170 | 0.9% |
+| **total** | | | **~136,500** | |
+| **tabular** | | | **93,894** | **68.8%** |
+
+~24% more chunks than planned, and more table-dominated: 68.8% against the projected 61%.
+
+**Do not extrapolate a ratio from a file smaller than one chunk.** The XLSX sample is a 15-word
+spreadsheet, which is 1 chunk at "15 w/chunk"; carrying that forward invented 13,904 XLSX chunks
+out of nothing. `composicion.py` now requires ≥3 chunks before trusting a per-format ratio and
+falls back to the CSV ratio for other tabular formats.
+
+**Retrieval on a 100% tabular index** (26 chunks, 3 documents, real e5-large): `resultados.jsonl`
+**VALID** against §9.3.1/§9.3.2 — the schema holds. The validator's sanity check fires though:
+one document takes rank 1 on 26 of 50 queries. Tabular chunks retrieve; they discriminate badly.
+
 ---
 
 ## 6. Sentence-length distribution — does a real >250-word sentence exist?

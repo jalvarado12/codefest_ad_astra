@@ -1100,7 +1100,26 @@ def _catalog_selfcheck(tmp):
                      if d["fuente"].replace("\\", "/") == "CEEEP/articulos/CEEEP_issue10-55-las-consecuencias-que-se-derivan.json")
     assert doc_real["metadata_catalogo"][0]["titulo"], doc_real
 
-    print("self-check OK (catalog: filename match, title-fallback match, dead-link non-match, doc attach)")
+    # Decision 12: the catalog's scalars are flattened onto the document so they
+    # ride along on every one of its chunks. The full rows stay document-level.
+    assert doc_real["catalogo_titulo"], doc_real
+
+    doc_resdal = next(d for d in generar_documentos(tmp, str(tmp / "reg.json"))
+                       if d["fuente"].replace("\\", "/").endswith("RESDAL_01-esp-el-marco-legal.pdf"))
+    assert doc_resdal["catalogo_titulo"].startswith("Atlas 2024"), doc_resdal
+    assert doc_resdal["catalogo_year"] == "2024", doc_resdal
+
+    # absent scalars stay absent rather than becoming empty strings -- they are
+    # optional extras under §3.4, and a blank value is worse than no key
+    assert "catalogo_country" not in doc_resdal, doc_resdal
+
+    # a document with no catalog entry carries none of them
+    doc_catalogo_sin = next(d for d in generar_documentos(tmp, str(tmp / "reg.json"))
+                             if d["fuente"].endswith("ceeep_catalogo.json"))
+    assert not any(k.startswith("catalogo_") for k in doc_catalogo_sin), doc_catalogo_sin
+
+    print("self-check OK (catalog: filename match, title-fallback match, "
+          "dead-link non-match, doc attach, scalars flattened)")
 
 
 def main():

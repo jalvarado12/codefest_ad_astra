@@ -1,12 +1,50 @@
-PyMuPDF
-easyocr
-pytesseract
-Pillow
-langdetect
-pandas
-openpyxl
-pypdf
-python-docx
-faiss-cpu
-numpy
-mapbox-vector-tile
+# CODEFEST AD ASTRA 2026 — Etapa 1
+#
+# Versions are pinned exactly. §1.4 makes reproduction a pass/fail gate:
+# "Si no es posible reproducir los resultados, se excluirá de la evaluación."
+#
+# THE MODEL REVISION IS PART OF THIS PIN. An id alone is not reproducible —
+# a tag can be moved. Both the encoder and its revision are constants in
+# pipeline_final.py and generador.py:
+#
+#     intfloat/multilingual-e5-large
+#     revision 3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3   (1024 dims)
+#
+# Install:  pip install -r requirements.txt
+#
+# On a CUDA machine, install torch from the PyTorch index first so pip resolves
+# the GPU build rather than the CPU wheel:
+#     pip install torch==2.13.0 --index-url https://download.pytorch.org/whl/cu121
+
+# --- extraction -------------------------------------------------------------
+PyMuPDF==1.28.2
+easyocr==1.7.2
+langdetect==1.0.9
+pandas==2.3.3
+openpyxl==3.1.5
+mapbox-vector-tile==2.2.0
+
+# --- encoding ---------------------------------------------------------------
+torch==2.13.0
+sentence-transformers==5.6.1
+transformers==5.14.1
+tokenizers==0.22.2
+huggingface-hub==1.26.0
+safetensors==0.8.0
+
+# pyarrow is a hard requirement of sentence-transformers' datasets dependency.
+# It is listed explicitly because its absence fails at import with a message
+# that names datasets, not sentence-transformers, and the wrong conclusion drawn
+# from that error ("the encoder cannot run on this machine") cost this project a
+# chunking strategy that silently discarded 44% of the indexed text.
+pyarrow==25.0.1
+
+# --- index ------------------------------------------------------------------
+faiss-cpu==1.15.0
+numpy==2.2.6
+
+# --- not required by the pipeline -------------------------------------------
+# pytesseract, pypdf and python-docx are imported only by the superseded
+# ocr_*.py and utilities.py scripts, kept as historical reference. Installing
+# them is not needed to reproduce the delivery; Tesseract in particular is a
+# system package, and OCR migrated to EasyOCR.

@@ -37,7 +37,13 @@ are marked **[A]**, and the one rejected finding is argued in Step 2.
 > Measured on the sample corpus: chunks over the encoder ceiling **29.1% → 0%**, indexed text
 > silently truncated **43.8% → 0%**, max chunk 8,947 → 504 tokens, escalera residue 0.
 >
-> **Item 5 (overlap) was NOT built.** It remains open; see Spec 03 §B4.
+> **Item 5 (overlap) built 2026-08-13.** `OVERLAP_ORACIONES = 1` complete sentence carried into
+> each following chunk; `FORMATOS_SIN_OVERLAP = {csv, xlsx, pbf}` get none. The seed is
+> sentence-final only (an escalera piece has no terminator and is never carried), counts toward
+> both caps rather than being added on top, and is trimmed from the front until the sentence
+> that triggered the close still fits — without that trim the packer can fail to progress.
+> The *number* stays open: 1 is the conservative end of the decision's "1–2", and there is no
+> relevance signal to justify 2. See Spec 03 §B4.
 >
 > **One trap this uncovered.** Removing the classifier is not optional tidying. While it was
 > still in place, a whole-file CSV was classified as a TITLE, and a title-only section produced

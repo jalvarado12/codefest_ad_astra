@@ -108,6 +108,42 @@ for fuente, cs in tabulares.items():
     if len(cs) == 1 and palabras > chunker.MAX_WORDS:
         fallos.append(f"tabular file still collapsed: {fuente} ({palabras} w in 1 chunk)")
 
+# -- overlap: present on prose, absent on tabular (Decision 2) --------------
+solapes = {"con": 0, "sin": 0}
+for d in docs:
+    if not d["texto_limpio"].strip():
+        continue
+    cs = chunker.procesar_documento(d, contar_tokens=contar)["chunks"]
+    if len(cs) < 2:
+        continue
+    repite = 0
+    for previo, actual in zip(cs, cs[1:]):
+        oraciones = chunker.separar_oraciones(previo["texto"])
+        if oraciones and actual["texto"].startswith(oraciones[-1]):
+            repite += 1
+    tabular = d["formato"] in chunker.FORMATOS_SIN_OVERLAP
+    solapes["sin" if tabular else "con"] += repite
+    if tabular and repite:
+        fallos.append(f"overlap en formato tabular: {d['fuente']} ({repite})")
+
+print(f"fronteras con overlap: prosa={solapes['con']} tabular={solapes['sin']} "
+      f"(tabular debe ser 0)")
+if solapes["con"] == 0:
+    fallos.append("ningun chunk de prosa arrastra la oracion anterior")
+
+# -- §3.3: no chunk may open or close mid-sentence -------------------------
+# Only checked on prose; tabular rows and escalera pieces legitimately have no
+# sentence terminator.
+abiertos = 0
+for c in chunks:
+    if c["formato"] in chunker.FORMATOS_SIN_OVERLAP:
+        continue
+    primera = c["texto"].lstrip()[:1]
+    if primera and primera.islower():
+        abiertos += 1
+print(f"chunks de prosa que abren en minuscula: {abiertos}/"
+      f"{sum(1 for c in chunks if c['formato'] not in chunker.FORMATOS_SIN_OVERLAP)}")
+
 idiomas = Counter(c.get("idioma") for c in chunks)
 print("idiomas:", dict(idiomas))
 
