@@ -110,11 +110,29 @@ Los `procesar_*.py`, `ocr_*.py`, `json_extract.py` y el paquete `extraccion/`
 quedaron **superados** por `extraccion_final.py`. Se conservan como referencia
 histórica.
 
+## OCR y device (extracción y encoding)
+
+`extraccion_final.py` ya no llama a EasyOCR con los valores por defecto de la
+librería: `canvas_size=1280`, `batch_size=16`, `workers=0` y un tope de
+render por página (`OCR_MAX_LADO_PX=2000`) para nunca rasterizar más píxeles
+de los que el OCR va a usar. `workers=0` es una medición A/B, no un default
+dejado así porque sí: `workers=2` dio 20.88s/página contra 2.75s/página con
+`workers=0` (7.6x peor), porque en macOS `DataLoader(num_workers>0)` usa
+`spawn`, y `readtext()` se llama una vez por página — el arranque de
+subprocesos nunca se amortiza.
+
+`pipeline_final.py` ahora detecta `mps` (Apple Silicon) además de `cuda` y
+`cpu`, y castea a fp16 también en `mps` — en fp32 con `batch_size=64` se
+midió un OOM real del backend MPS en una máquina de 8GB que cuelga el
+proceso en vez de fallar limpio. El encoder también se carga *después* de la
+extracción, no antes: tener e5-large ya cargado durante el OCR generó
+contención GPU/RAM medida (una página de 2.5–6.5s tardó más de 9 minutos con
+ambos modelos en memoria a la vez).
+
 ## Pendiente
 
-- Superposición (overlap) de 1–2 oraciones entre chunks de formatos de prosa.
 - `informe_tecnico.pdf` — es calificado, y §3.2 exige justificar explícitamente
   la estrategia de chunking.
-- Corrida sobre el corpus completo: todo lo medido hasta ahora es sobre una
-  muestra estratificada de 25 archivos.
+- Corrida sobre el corpus completo y su validación: lo medido en
+  `DOCUMENTATION.md` es sobre una muestra estratificada de 25 archivos.
 - Grafo de conocimiento (componente bonus).

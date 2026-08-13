@@ -240,6 +240,29 @@ is enormously expensive:
 Both figures are measured, not estimated. The 12.2× gap is why extraction runs on GPU, and is
 the single biggest cost decision in the project.
 
+**OCR call tuning.** `readtext()` is no longer called with EasyOCR's defaults. Four constants
+near the top of `extraccion_final.py` override them:
+
+| Constant | Value | Why |
+|---|---|---|
+| `OCR_CANVAS_SIZE` | 1280 | Cap EasyOCR applies to the image's longer side before CRAFT detection (library default 2560) |
+| `OCR_BATCH_SIZE` | 16 | Text crops processed together by the recognizer |
+| `OCR_WORKERS` | 0 | See below — measured, not assumed |
+| `OCR_MAX_LADO_PX` | 2000 | Render cap computed from the page's real size, so PDF pages are never rasterized to more pixels than OCR will use |
+
+`OCR_WORKERS = 0` is an A/B measurement against the same reader and the same pages, not a
+default left alone: `workers=2` measured 20.88s/page against 2.75s/page at `workers=0` — 7.6×
+worse. The cause is that `DataLoader(num_workers>0)` uses `spawn` on macOS rather than `fork`,
+and `readtext()` is called once *per page*, so every page pays a full subprocess-startup cost for
+a handful of text crops that never amortizes it. This was measured on macOS specifically; a
+Linux run (which forks by default) might tolerate `workers>0` better, but re-measure before
+changing it rather than assuming.
+
+`dpi_ocr` now defaults to 150 (was 300) and `gpu_ocr` defaults to `True`, matching how
+`pipeline_final.py` actually invokes the extractor. `_obtener_lector_easyocr` also logs the
+EasyOCR device actually in use, because `gpu=True` silently falls back to CPU when no GPU is
+visible — this used to be invisible.
+
 **JSON.** By far the largest group (964 files) and the most variable. The spec (§2.1) says to
 interpret the object and explicitly select the fields holding article text, keeping descriptive
 fields (`url`, `date`, `authors`) as metadata rather than mixing them into the body.
@@ -503,6 +526,20 @@ is the single easiest way to lose the whole score, so the code makes the two pat
 functions rather than a flag.
 
 Vectors are L2-normalised at encoding time, so cosine similarity equals the dot product.
+
+**Device selection.** `encoder_e5()` picks `cuda` → `mps` → `cpu`, in that order
+(`torch.backends.mps.is_available()` covers Apple Silicon's Metal backend). The call is
+harmless on non-Mac machines — it simply returns `False` there and the code falls through to
+`cpu` exactly as before. fp16 casting now applies on `mps` as well as `cuda`: fp32 at
+`batch_size=64` measured a real MPS out-of-memory on an 8GB Mac (`Insufficient Memory,
+kIOGPUCommandBufferCallbackErrorOutOfMemory`) that hung the process rather than raising
+cleanly; fp16 at the same batch size ran clean, measured.
+
+`ejecutar()` also now loads the encoder **after** extraction rather than before. Extraction
+includes OCR (EasyOCR on GPU/MPS), and having e5-large already resident in the same unified
+memory while OCR runs measured real GPU/RAM contention on an 8GB machine — a page that takes
+2.5–6.5s in isolation hung for over 9 minutes with both models loaded at once. Loading the
+encoder only once extraction is done avoids that contention entirely.
 
 ### 5.7 What a chunk record looks like
 
@@ -1009,6 +1046,13 @@ model revision — so a run can be audited after the fact instead of re-run.
 - **A vanished session is not proof the run failed.** One OCR run went 404 with its output file
   gone and looked dead at 27/50; it had actually completed all 50 files, and the polling
   download simply raced the teardown. Read the job's own stdout before concluding anything.
+- **Running locally on Apple Silicon uses `mps`, not `cpu`.** `encoder_e5()` now falls back to
+  `mps` before `cpu`. On an 8GB Mac, fp32 at `batch_size=64` OOMs the MPS backend and hangs
+  rather than raising (`Insufficient Memory, kIOGPUCommandBufferCallbackErrorOutOfMemory`) — the
+  code casts to fp16 on `mps` for this reason, so do not remove that cast to "simplify" device
+  handling. The encoder is also loaded only *after* extraction finishes, not before: having
+  e5-large resident during EasyOCR's own GPU/MPS work measured real contention on the same 8GB
+  machine (a 2.5–6.5s page hanging 9+ minutes).
 
 ---
 
