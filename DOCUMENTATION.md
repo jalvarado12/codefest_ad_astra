@@ -453,6 +453,38 @@ few lines (skip a fragment whose text is already substantially present in an ear
 it is a retrieval-quality tradeoff with no ground truth to tune against, so it is recorded here
 rather than guessed at.
 
+#### Is the overlap right? Separate the mechanism from the setting
+
+The mechanism is verified on real data. The setting is a bet. These are not the same claim and
+the distinction matters when reading any later result.
+
+**Confirmed, measured on the sample corpus:**
+
+| | |
+|---|---|
+| Placement | 354 prose chunk boundaries carry the previous sentence, **0** tabular ones |
+| Caps | 0 chunks over 506 tokens, 0 over 250 words — the overlap is paid out of the budget |
+| §3.3 | Only sentence-final units are eligible as a seed, so an escalera fragment can never open a chunk |
+| Continuity | Every chunk after the first begins with the previous chunk's last sentence — asserted per boundary, not sampled |
+| Cost | +11.8% chunks (475 → 531), inside the 10–20% budgeted for prose |
+
+**Not confirmed.** `OVERLAP_ORACIONES = 1` is a guess. Decision 2 permitted "1–2 sentences" and
+1 is the conservative end, chosen because there is no relevance signal to justify 2. There is no
+evidence here that 1 beats 0, or that 2 beats 1. This repository contains no ground truth, so
+recall cannot be measured against anything.
+
+So overlap is **correctly implemented**, not **empirically optimal**. It is a bet: roughly 12%
+more index and some duplicate-fragment risk, in exchange for answers that straddle a boundary
+staying retrievable. That bet is standard practice and §3.2 explicitly permits it — but it stays
+a bet until something measures it.
+
+**How to settle it cheaply, when there is something to measure against.** Cache 2 keys on the
+`sha256` of the chunk text, so changing `OVERLAP_ORACIONES` re-encodes only the chunks whose
+text actually moved and reuses every other vector. Run the corpus once at `overlap=1`, then
+re-run at `overlap=0` and at `overlap=2`; each sweep costs minutes rather than a full encode.
+Compare the resulting `resultados.jsonl` files against the graders' ground truth. Do the same
+for `MAX_WORDS`, which is the other single parameter with the same property.
+
 ### 5.6 Embedding
 
 Model: **`intfloat/multilingual-e5-large`**, pinned to revision
@@ -839,11 +871,12 @@ is why this was measured before it.
 prose formats; `csv`, `xlsx` and `pbf` get none. See §5.5 for why each of those two halves is
 the way it is.
 
-What remains open is not the mechanism but the **number**. `OVERLAP_ORACIONES` is 1 because 1
-is the smaller of the "1–2 sentences" the decision allowed, and there is no relevance signal to
-justify 2. Both it and `MAX_WORDS` are single parameters that invalidate cache 2 cleanly by
-text hash, so sweeping them is cheap — and meaningless until there is something to measure
-against.
+What remains open is not the mechanism but the **number**, and the fact that the benefit itself
+is unmeasured. `OVERLAP_ORACIONES` is 1 because 1 is the smaller of the "1–2 sentences" the
+decision allowed, and there is no relevance signal to justify 2. Nothing here shows that 1 beats
+0. Both it and `MAX_WORDS` are single parameters that invalidate cache 2 cleanly by text hash,
+so sweeping them costs minutes — and is meaningless until there is something to measure against.
+See §5.5, *"Is the overlap right?"*, for what is confirmed versus what is assumed.
 
 **3. Block classification is crude. [FIXED]** The chunker labelled any block of ≤10 words a
 title, so `"El riesgo es alto."` became a section header — and a single-block CSV made a
