@@ -43,6 +43,26 @@ _WEIRD_SPACES_RE = re.compile(r"[ ​‌‍﻿]")
 _MULTI_NEWLINE_RE = re.compile(r"\n{3,}")
 _MULTI_SPACE_RE = re.compile(r"[ \t]{2,}")
 
+# Separator between the logical units an adapter emits: one CSV row, one
+# spreadsheet row, one PBF element. It must be a BLANK line, because
+# chunker.separar_bloques splits on "\n\n" -- with a single newline every
+# tabular file collapses into one block and therefore one chunk, of which the
+# encoder reads the first 512 tokens and discards the rest (Step 2 fix 1).
+# Sec. 2.1: "Cada fila puede tratarse como una unidad de fragmentacion
+# independiente."
+_UNION_FILAS = "\n\n"
+
+# Files that live in the corpus tree but are not corpus: the evaluation queries
+# and two admin spreadsheets absent from the inventory (Step 2 fix 5).
+_NO_CORPUS = {
+    "extracto_preguntas_50_v2.pdf",
+    "indice_datos_codefest.xlsx",
+    "fase ordenada codefest.xlsx",
+}
+
+# Under this many words langdetect is guessing; Decision 7 prefers None.
+_IDIOMA_MIN_PALABRAS = 50
+
 
 def remove_control_chars(text: str) -> str:
     text = _WEIRD_SPACES_RE.sub(" ", text)
@@ -79,6 +99,24 @@ def clean_text(raw_text: str) -> str:
     text = remove_repeated_lines(text)
     text = collapse_whitespace(text)
     return text
+
+
+def detectar_idioma(texto: str) -> str | None:
+    """Decision 7: seeded, document-level, and None rather than a guess.
+
+    The seed is set on every call so the result never depends on how many
+    documents were detected before this one.
+    """
+    if len(texto.split()) < _IDIOMA_MIN_PALABRAS:
+        return None
+
+    try:
+        from langdetect import DetectorFactory, detect
+
+        DetectorFactory.seed = 0
+        return detect(texto)
+    except Exception:
+        return None
 
 
 def fila_a_texto(fila: dict, separador: str = " | ") -> str:
@@ -251,7 +289,7 @@ class CSVExtractor(ExtractorBase):
             texto_fila = fila_a_texto(fila)
             if texto_fila:
                 filas_texto.append(texto_fila)
-        return "\n".join(filas_texto)
+        return _UNION_FILAS.join(filas_texto)
 
 
 class ExcelExtractor(ExtractorBase):
@@ -266,7 +304,7 @@ class ExcelExtractor(ExtractorBase):
         df = pd.read_excel(file_path, sheet_name=self.sheet_name, dtype=str)
         df = df.fillna("")
         filas_texto = [fila_a_texto(fila) for fila in df.to_dict(orient="records")]
-        return "\n".join(f for f in filas_texto if f)
+        return _UNION_FILAS.join(f for f in filas_texto if f)
 
 
 class TextoExtractor(ExtractorBase):
@@ -376,37 +414,45 @@ class ImagenExtractor(ExtractorBase):
 
 
 class PBFExtractor:
-    def extraer_tileset(self, tileset_root: Path, archivos_pbf: list[Path]) -> str:
+    """One document per .pbf file, deduplicating elements within that file.
+
+    Sec. 2.3 is explicit -- "un documento corresponde a un archivo individual
+    provisto por ADL" -- and the inventory lists all 73 tiles as separate rows
+    with their own DOC_ID. A tileset-level document would be named after a
+    directory, match no inventory row, and score zero on every PBF item under
+    Sec. 10.2.1. Near-duplicate tiles cost precision; an unmatchable document
+    costs everything (Step 2 fix 2).
+    """
+
+    extensiones = (".pbf",)
+
+    def extraer(self, file_path: Path) -> str:
         import mapbox_vector_tile
 
+        tile = mapbox_vector_tile.decode(file_path.read_bytes())
+
         elementos_unicos: dict[tuple, str] = {}
-        for pbf_path in sorted(archivos_pbf):
-            try:
-                tile = mapbox_vector_tile.decode(pbf_path.read_bytes())
-            except Exception:
-                continue
+        for nombre_capa, capa in tile.items():
+            for elemento in capa.get("features", []):
+                atributos = elemento.get("properties", {})
+                id_elemento = (
+                    atributos.get("fid")
+                    or atributos.get("id")
+                    or atributos.get("FID")
+                    or tuple(sorted(atributos.items(), key=lambda kv: kv[0]))
+                )
+                clave = (nombre_capa, id_elemento)
+                if clave in elementos_unicos:
+                    continue
 
-            for nombre_capa, capa in tile.items():
-                for elemento in capa.get("features", []):
-                    atributos = elemento.get("properties", {})
-                    id_elemento = (
-                        atributos.get("fid")
-                        or atributos.get("id")
-                        or atributos.get("FID")
-                        or tuple(sorted(atributos.items(), key=lambda kv: kv[0]))
-                    )
-                    clave = (nombre_capa, id_elemento)
-                    if clave in elementos_unicos:
-                        continue
+                pares = [f"capa: {nombre_capa}"] + [
+                    f"{atributo}: {dato}"
+                    for atributo, dato in atributos.items()
+                    if dato is not None and str(dato).strip() != ""
+                ]
+                elementos_unicos[clave] = " | ".join(pares)
 
-                    pares = [f"capa: {nombre_capa}"] + [
-                        f"{atributo}: {dato}"
-                        for atributo, dato in atributos.items()
-                        if dato is not None and str(dato).strip() != ""
-                    ]
-                    elementos_unicos[clave] = " | ".join(pares)
-
-        return "\n".join(elementos_unicos.values())
+        return _UNION_FILAS.join(elementos_unicos.values())
 
 
 # ==============================================================================
@@ -421,6 +467,7 @@ _ADAPTADORES: list[ExtractorBase] = [
     HTMLExtractor(),
     JSONExtractor(),
     ImagenExtractor(),
+    PBFExtractor(),
 ]
 
 _FORMATO_POR_EXT = {
@@ -440,6 +487,7 @@ _FORMATO_POR_EXT = {
     ".tiff": "imagen",
     ".bmp": "imagen",
     ".webp": "imagen",
+    ".pbf": "pbf",
 }
 
 _DISPATCH: dict[str, ExtractorBase] = {
@@ -449,40 +497,73 @@ _DISPATCH: dict[str, ExtractorBase] = {
 }
 
 
-def _localizar_raiz_tileset(pbf_path: Path, input_dir: Path) -> Path:
-    for ancestro in pbf_path.parents:
-        if ancestro == input_dir:
-            break
-        if ancestro.name.lower() == "tiles":
-            return ancestro.parent
-    return pbf_path.parent
+# Decision 12: these catalog scalars ride along on every chunk of a matched
+# document so a retrieved fragment carries its provenance. Each maps to the
+# candidate keys the different catalogs actually use. The full catalog rows stay
+# document-level in metadata_catalogo.
+_CATALOGO_PLANO = {
+    "catalogo_titulo": ("titulo", "title"),
+    "catalogo_year": ("year", "anio", "año", "fecha", "date"),
+    "catalogo_country": ("country", "pais", "país"),
+    "catalogo_authors": ("authors", "autores", "autor", "author"),
+}
 
 
-def _agrupar_tilesets_pbf(input_dir: Path) -> dict[Path, list[Path]]:
-    grupos: dict[Path, list[Path]] = defaultdict(list)
-    for pbf_path in input_dir.rglob("*.pbf"):
-        raiz = _localizar_raiz_tileset(pbf_path, input_dir)
-        grupos[raiz].append(pbf_path)
-    return grupos
+def _aplanar_catalogo(entradas: list) -> dict:
+    """First non-empty value wins, scanning entries in match order."""
+    plano = {}
+
+    for campo, claves in _CATALOGO_PLANO.items():
+        for entrada in entradas:
+            if not isinstance(entrada, dict):
+                continue
+
+            valor = next((entrada[k] for k in claves
+                          if entrada.get(k) not in (None, "", [])), None)
+
+            if valor is not None:
+                plano[campo] = valor if isinstance(valor, str) else str(valor)
+                break
+
+    return plano
 
 
 def _empaquetar(registro: RegistroDocumentos, fuente: str, formato: str,
                  texto_crudo: str, ruta_relativa: Path,
-                 metadata_catalogo: list | None = None) -> dict:
+                 metadata_catalogo: list | None = None,
+                 fila_inventario: dict | None = None) -> dict:
+    # fuente is the relative POSIX path and stays the graded key: path -> name is
+    # derivable, name -> path is not, and 114 PDFs share a basename across
+    # pdfs/Reports and pdfs/Translation. nombre_archivo covers a basename-matching
+    # grader without collapsing those documents (Step 2 fix 3).
+    fuente = fuente.replace("\\", "/")
+    texto_limpio = clean_text(texto_crudo)
+    entradas = metadata_catalogo or []
+
     return {
         "doc_id": registro.obtener_o_crear(fuente),
         "fuente": fuente,
+        "nombre_archivo": fuente.rsplit("/", 1)[-1],
         "formato": formato,
         "fenomeno": inferir_fenomeno(ruta_relativa),
-        "texto_limpio": clean_text(texto_crudo),
-        "metadata_catalogo": metadata_catalogo or [],
+        "idioma": detectar_idioma(texto_limpio),
+        "texto_limpio": texto_limpio,
+        "metadata_catalogo": entradas,
+        # ADL's own id for this file, free to carry and useful for traceability
+        # against the 1,826-row inventory (Step 2 fix 3 / Step 3).
+        "adl_doc_id": (fila_inventario or {}).get("adl_doc_id"),
+        **_aplanar_catalogo(entradas),
     }
 
 
 def generar_documentos(input_dir: str, registry_path: str = "doc_registry.json",
-                        on_error=None) -> Iterator[dict]:
+                        on_error=None, inventario: dict | None = None) -> Iterator[dict]:
     """Generador ciego al formato: recorre `input_dir` y hace yield de un
-    documento estandarizado por cada archivo/tileset soportado.
+    documento estandarizado por cada archivo soportado.
+
+    Un archivo, un documento (Sec. 2.3), `.pbf` incluido: los 73 tiles son
+    filas propias del inventario y un documento por tileset no calzaría con
+    ninguna.
 
     `on_error(fuente, excepcion)` es opcional; si se pasa, se invoca cuando
     un archivo falla en vez de propagar la excepción (el documento se sigue
@@ -494,25 +575,13 @@ def generar_documentos(input_dir: str, registry_path: str = "doc_registry.json",
     """
     input_dir = Path(input_dir)
     registro = RegistroDocumentos(registry_path)
-    pbf_extractor = PBFExtractor()
     catalogo_por_fuente = _indexar_metadata_catalogo(input_dir)
 
-    tilesets = _agrupar_tilesets_pbf(input_dir)
-    for tileset_root, archivos_pbf in sorted(tilesets.items()):
-        ruta_relativa = tileset_root.relative_to(input_dir)
-        fuente = str(ruta_relativa)
-        try:
-            texto_crudo = pbf_extractor.extraer_tileset(tileset_root, archivos_pbf)
-        except Exception as e:
-            if on_error:
-                on_error(fuente, e)
-            texto_crudo = ""
-        yield _empaquetar(registro, fuente, "pbf", texto_crudo, ruta_relativa)
-
-    archivos_pbf_ya_procesados = {p for archivos in tilesets.values() for p in archivos}
-
     for file_path in sorted(input_dir.rglob("*")):
-        if not file_path.is_file() or file_path in archivos_pbf_ya_procesados:
+        if not file_path.is_file():
+            continue
+
+        if file_path.name.lower() in _NO_CORPUS:
             continue
 
         ext = file_path.suffix.lower()
@@ -522,6 +591,7 @@ def generar_documentos(input_dir: str, registry_path: str = "doc_registry.json",
 
         ruta_relativa = file_path.relative_to(input_dir)
         fuente = str(ruta_relativa)
+        clave = fuente.replace("\\", "/")
         try:
             texto_crudo = adaptador.extraer(file_path)
         except Exception as e:
@@ -530,7 +600,8 @@ def generar_documentos(input_dir: str, registry_path: str = "doc_registry.json",
             texto_crudo = ""
 
         yield _empaquetar(registro, fuente, _FORMATO_POR_EXT[ext], texto_crudo, ruta_relativa,
-                          catalogo_por_fuente.get(fuente.replace("\\", "/")))
+                          catalogo_por_fuente.get(clave),
+                          (inventario or {}).get(clave))
 
     registro.guardar()
 

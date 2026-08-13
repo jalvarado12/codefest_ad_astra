@@ -260,17 +260,37 @@ and the list is where the real boundaries are.
 **CSV and XLSX.** Read the header, then each row becomes `columna: valor | columna2: valor2`,
 so every value keeps its column name as context. Empty cells are dropped.
 
+Rows are joined with a **blank line**, not a newline, and that single character is load-bearing.
+The chunker splits blocks on `"\n\n"`, so with a plain newline every tabular file arrived as one
+block and became one chunk — worst measured case 4,170 words in a single chunk, of which the
+encoder read 512 tokens. §2.1 prescribes the fix directly: *"Cada fila puede tratarse como una
+unidad de fragmentación independiente."* The separator is the named constant `_UNION_FILAS`
+precisely so it cannot drift back.
+
 **Images.** OCR unconditionally. If the result is under 30 characters the image is decorative
 and returns empty rather than OCR noise.
 
-**PBF** (Mapbox vector map tiles). Decode each tile, walk its layers and features, and turn
-attributes into `atributo: valor` text.
+**PBF** (Mapbox vector map tiles). Decode the tile, walk its layers and features, and turn
+attributes into `atributo: valor` text, one element per blank-line-separated block, duplicates
+within the file removed.
+
+**One `.pbf` file is one document**, not one document per tileset. §2.3 is explicit — *"un
+documento corresponde a un archivo individual provisto por ADL"* — and ADL's inventory lists all
+73 tiles as separate rows with their own `DOC_ID`. A tileset-level document would be named after
+a *directory*, match no inventory row, and score zero on every PBF item under §10.2.1. The spec
+is in genuine tension with itself here, since §2.1's *"quedarse con una sola versión para no
+duplicar la data"* argues the other way; it is resolved on risk asymmetry, because 73
+near-duplicate documents cost precision while one unmatchable document costs everything.
 
 **TXT/MD.** Passed through; Markdown headings are left intact as structural signals.
 
 ### 5.2 Cleaning
 
-One shared function, applied to every adapter's output:
+**One cleaner, and only one.** `extraccion_final.clean_text()` is it. The chunker used to carry
+its own near-duplicate `clean()`; it was removed (Decision 9), because two cleaners means two
+definitions of what the text *is*, and the one that runs last silently wins.
+
+Applied to every adapter's output:
 
 1. Remove control characters and zero-width spaces
 2. Normalise Unicode to NFC (so accented characters have one canonical encoding)
@@ -328,32 +348,74 @@ backslash path would be a silent, total F1@3 failure.
 
 ### 5.5 Chunking
 
-Handled by `chunker.py`. The strategy is **paragraph packing with a word budget**:
+Handled by `chunker.py`, which does **chunking and nothing else**. Cleaning and structure
+detection are extraction's job (§5.2); the chunker receives text that is already clean and
+already blank-line separated into logical units.
 
-1. Split the cleaned text into blocks on blank lines
-2. Pack consecutive blocks into a chunk until adding the next would exceed **250 words**
-3. Never split a paragraph across chunks
+The strategy is **sentence packing under two caps at once**:
 
-**Why 250 words?** Because §9.2 caps *returned* fragments at 250 words. If every chunk already
-respects that limit, the generator can return chunks verbatim and never needs to split anything
-at query time. One number, chosen once, deletes an entire subsystem downstream.
+1. Split the clean text into blocks on blank lines
+2. Split each block into sentences
+3. Pack sentences into a chunk until adding the next would exceed **250 words** *or*
+   **506 tokens** — then close the chunk *before* that sentence
 
-**Why words and not tokens?** Tokens would be the natural unit, since the encoder's limit is in
-tokens. But counting tokens requires loading the tokenizer, and the tokenizer does not install
-on the development machine. Counting words instead means **chunk boundaries are identical
-everywhere** — laptop and GPU server produce byte-identical chunks. The token count is still
-recorded, measured with the real tokenizer at embedding time, when it is loaded anyway.
+**Why 250 words?** §9.2 caps *returned* fragments at 250 words. If every chunk already respects
+that limit, the generator can return chunks verbatim and never needs to split anything at query
+time. One number, chosen once, deletes an entire subsystem downstream.
 
-**Sentence completeness (§3.3).** No chunk may contain a partial sentence. Paragraph packing
-satisfies this automatically, since a paragraph boundary is always also a sentence boundary.
-The exception is a single paragraph longer than 250 words, which needs splitting at sentence
-boundaries — and that requires knowing what a sentence *is*.
+**Why 506 tokens?** The encoder truncates its input at 512. The `"passage: "` prefix costs 4
+tokens and the two special tokens cost 2, leaving 506 for content. A 250-word Spanish chunk
+runs about 600 tokens (measured ratio ≈ 2.43 tokens/word), so the word cap alone does **not**
+keep chunks inside the encoder — this is why both caps are needed rather than one.
 
-This turns out to be a real trap. A naive split on `.` breaks `El Dr. Pérez` into two
-"sentences". The correct splitter carries an abbreviation list (`Dr.`, `Sra.`, `EE.UU.`,
-`etc.`, `vs.`, …) and handles Spanish inverted punctuation. Two independent implementations
-were written during development; the one without the abbreviation list passed all its own tests
-and was still wrong, because its test fixtures happened to contain no abbreviations.
+**Why both caps, and why this exact rule?** §3.3 prescribes it almost verbatim:
+
+> *"si se fija un tamaño máximo de n tokens, el corte efectivo debe retroceder al final de la
+> última oración completa que quepa dentro de ese límite"*
+
+Closing before the overflowing sentence is not a design choice; it is the spec's own
+instruction. Nothing is ever cut mid-sentence, and chunks simply come out shorter in Spanish.
+
+**What this fixed.** The previous paragraph-packing chunker never split a paragraph, so one
+3,000-word paragraph became one 3,000-word chunk. Measured on real extracted text: **29.1% of
+chunks exceeded the encoder ceiling and 43.8% of all indexed text was silently discarded** —
+no error, no warning, retrieval still returning plausible results from the surviving first 512
+tokens while half the corpus was unsearchable. After the change, on the same text: **0% over
+the cap, 0% discarded.**
+
+**Sentence detection is a real trap.** A naive split on `.` breaks `El Dr. Pérez` into two
+"sentences" — and a chunk boundary there would violate §3.3 on both sides. `separar_oraciones`
+takes a boundary only when the preceding word is not an abbreviation, an initial or a decimal,
+*and* the following text starts like a sentence. It is deliberately conservative in one
+direction: missing a boundary costs a longer unit, which the escalera below handles; inventing
+one corrupts the text.
+
+**The escalera, for units no sentence boundary reaches.** A single "sentence" can still exceed
+the cap — never genuine prose in this corpus, always an extraction artifact: an abbreviation
+table, a figure caption, an org chart, a `| URL: … |` field run. Five levels are tried in order
+of how much meaning the cut destroys:
+
+| # | Level | Sample-corpus hits |
+|---|---|---|
+| 1 | clause boundaries `;` `:` | 17 |
+| 2 | field separator `\|` | 1 |
+| 3 | list markers `• - 1. a)` | 1 |
+| 4 | single newlines | 0 |
+| 5 | commas | 0 |
+
+`chunker.ESCALERA_HITS` counts these per run and `run_manifest.json` records them, so levels
+that never fire can be deleted rather than assumed useful.
+
+**The residue, and which rule yields.** If no level splits a unit, it is emitted **intact and
+over the cap**. This is deliberate. §3.3 is labelled *"Requisito obligatorio"* and is absolute;
+§4.3 only asks that fragments be *"diseñados para no superar"* the limit. Cutting the sentence
+would break the mandatory rule to satisfy the advisory one, so the sentence survives and the
+encoder truncates it. Measured residue on the sample corpus: **zero**.
+
+There is one case with no clean answer: a single sentence over **250 words**. §9.2 caps returned
+fragments at 250 and §9.2.1 requires the split respect §3.3 — impossible when there is no
+internal sentence boundary. The spec contradicts itself there; §3.3 yields because §9.2 is the
+mechanically graded one. No such case was found in the corpus.
 
 ### 5.6 Embedding
 
@@ -445,6 +507,17 @@ The text cache is Colab's **output**, not its input. An earlier draft of the pla
 backwards, which would have meant 14 hours of local CPU OCR to produce a file the GPU makes in
 about an hour. The cache's SHA-256 key is environment-independent, so moving it between
 machines is safe by construction.
+
+**In practice `pipeline_final.py` does all three in one process**, because both caches make the
+split optional rather than mandatory: run it on Colab, pull `cache/textos.jsonl` back, and every
+later local run reuses the extraction for free. The pass A / pass B split is still the right
+mental model for *where the cost is*, and still the fallback when a session dies mid-run — which
+is what the resume path exists for.
+
+**Colab sessions vanish when idle.** `colab sessions` reporting *"No active sessions found on
+server"* is the normal state, not an outage; `colab new -s gentest --gpu T4` recreates one in
+seconds. Uploads against a dead session fail with a bare `FAIL` per file, which reads like a
+path bug and is not one. Two GPU runs were lost to this before it was understood.
 
 ---
 
@@ -587,9 +660,11 @@ directory.
 on a T4, 12.2× faster than CPU, zero empty results, zero errors.
 
 **The whole flow, end to end, on real data.** A 25-file stratified sample (11 PDF including 3
-scanned, 8 JSON, 2 CSV, 2 JPG, 1 XLSX, 1 TXT, all three fenómenos) was run through
+scanned, 8 JSON, 2 CSV, 2 JPG, 1 XLSX, 1 TXT, all three fenómenos) run through
 extraction → chunking → real e5-large on a T4 → FAISS → `generador.py` invoked as a subprocess
-against the artifacts it produced:
+against the artifacts it produced.
+
+*First run, 2026-08-12, prototype builder and the paragraph chunker:*
 
 | | |
 |---|---|
@@ -601,31 +676,91 @@ against the artifacts it produced:
 
 Retrieval behaved sensibly: 16 distinct documents and 98 distinct chunks across the 50
 questions, results spread over all three fenómenos, the most frequent rank-1 document winning
-15/50 (well below a domination threshold), and fragment lengths capped at exactly 250 words —
-confirming the generator's splitter works on genuinely oversized real chunks.
+15/50 (well below a domination threshold), and fragment lengths capped at exactly 250 words.
 
 This is what surfaced debt item 8 below, which is the single most consequential finding in the
 project so far.
 
-### Delivered but not yet fixed
+*Second run, 2026-08-13, `pipeline_final.py` itself on a T4 — same corpus:*
 
-**`chunker.py`** — the team's chunker, audited. It works, but needs four changes before it is
-spec-compliant (all detailed in `specs/02-migration.md` Step 1):
+| | |
+|---|---|
+| Selftests on the VM first | `chunker.py` and `pipeline_final.py` both pass before any GPU time is spent |
+| Inventory reconciliation | 25 matched, **0 files without a row** |
+| Whole pipeline | **439 s**, 25 documents, **0 errors** |
+| Extraction | 389 s (OCR-dominated) |
+| Chunking | 475 chunks in **2.6 s** |
+| Encoding | 475 × 1024 in **10 s** at batch 64 |
+| `num_tokens` | p50 357, p95 443, p99 499, max **504** — zero over the cap |
+| Escalera | clauses 17, pipes 1, list markers 1, newlines 0, commas 0, **residue 0** |
+| Index alignment | `index.ntotal == ids.json == metadata lines == 475` ✓ |
+| `resultados.jsonl` | **VALID** against §9.3.1/§9.3.2 |
 
-1. It emits only 5 of the 8 mandatory Table 1 fields
-2. CSV/XLSX collapse into a **single chunk per file** — worst case 7.1 million words in one
-   chunk, of which the encoder sees the first 512 tokens
-3. Oversized blocks are never split, so 35% of PDF chunks exceed 250 words
-4. No overlap between chunks
+The chunk count rose 326 → 475 because chunks are now bounded by tokens as well as words, and
+because tabular files no longer collapse into one chunk each. Nothing was lost; the same text
+is spread over more, smaller, fully-encoded chunks.
+
+Retrieval changed in the direction the fix predicts:
+
+| | before | after |
+|---|---|---|
+| Distinct chunks returned across 50 queries | 99 | **125** |
+| Shortest returned fragment | 2 words | **13 words** |
+| Median returned fragment | 204 words | 233 words |
+| Formats represented | pdf, json, txt | pdf, json, txt, **xlsx** |
+
+The XLSX appearing at all is the clearest single signal: it was one collapsed chunk before, of
+which the encoder read the first 512 tokens, and it never won a slot. Distinct documents moved
+15 vs 16 — noise at this sample size, and there is no ground truth to call either better.
+
+**`chunker.py`** — rewritten to chunking only, and its self-check passes: abbreviation,
+initial and decimal boundaries; close-before-overflow under each cap independently; the
+escalera on a pipe run; residue returned uncut; a blank-line-separated table yielding many
+chunks rather than one; and the full Table 1 contract including `texto` (not `text`) and
+integer types.
+
+`clean()`, `clasificar_bloques()` and `agrupar_secciones()` are gone (Decisions 3 and 9).
+Removing the classifier mattered: it labelled any block of ≤10 words a title, and on a
+single-block CSV it labelled a 4,170-word table a title, which is how three documents briefly
+vanished from the index during this work.
+
+**`pipeline_final.py`** — built, with an 11-check selftest that runs offline against a fake
+encoder, so caching, checkpointing, resume and alignment are all exercised without a GPU or a
+2.2 GB download. It covers: identical reruns extracting and encoding nothing; the non-corpus
+exclusion; editing one document re-extracting only that one; the checkpoint-prefix path and the
+text-hash reuse path separately; §1.4 alignment; **resume after a simulated kill, then alignment
+re-asserted**; a chunk's own vector retrieving itself at rank 1; the Table 1 contract on every
+line; and `--rebuild` ignoring both caches.
+
+**`inventario.py`** — Step 3 reconciliation. `Carpeta` + `Nombre estandarizado` reconstructs
+`fuente` exactly, giving a unique key across all **1,826** rows and supplying `adl_doc_id`.
+Reconciling the 25-file sample: **25/25 matched, 0 orphans.**
+
+### Measured after the Step 1 + Step 2 fixes
+
+Same sample corpus, real extraction, real tokenizer:
+
+| | before | after |
+|---|---|---|
+| Chunks over the 512-token ceiling | 29.1% | **0%** |
+| Indexed text silently truncated by the encoder | 43.8% | **0%** |
+| Worst single chunk | 8,947 tokens / 4,170 words | 504 tokens / 250 words |
+| Chunks over the §9.2 250-word cap | 114 of 326 | **0** |
+| Escalera residue (emitted over the cap) | — | **0** |
+| Documents reaching the index | 23 | 25 |
+
+The worst offender was one 25 KB CSV that became a single 4,170-word chunk. It is now 23 chunks.
+The cause was one character: `CSVExtractor` joined rows with `"\n"`, and `separar_bloques`
+splits on `"\n\n"`, so every tabular file collapsed into a single block.
 
 ### Does not exist yet
 
-**`pipeline_final.py`** — the orchestrator. Its core has been prototyped
-(`_gentest/build_index_gpu.py`) to produce real artifacts for end-to-end testing, but the real
-thing, with caching and resume, is not written.
-
 **`informe_tecnico.pdf`** — not started. It is graded, and §3.2 makes justifying the chunking
-strategy a hard requirement.
+strategy a hard requirement. Note that §3.2 requires the *hybrid* strategy be justified
+explicitly, which now includes the dual cap and the escalera.
+
+**A full-corpus run.** Everything above is measured on a 25-file stratified sample. The full
+corpus is not present on the development machine.
 
 ---
 
@@ -640,16 +775,20 @@ with prose for every result slot.
 crowd out prose, a `formato` post-filter is one line, since the field is already in the
 metadata.
 
-**2. No chunk overlap.** Chunks are cut at paragraph boundaries with nothing carried across. An
-answer that straddles a boundary retrieves poorly. Overlap is the most common recall win in
-retrieval systems and §3.2 explicitly permits it.
+**2. No chunk overlap. [STILL OPEN]** Chunks are cut at sentence boundaries with nothing
+carried across. An answer that straddles a boundary retrieves poorly. Overlap is the most
+common recall win in retrieval systems and §3.2 explicitly permits it.
 *Decision: implement 1–2 sentences of overlap on prose formats only* — repeating CSV rows would
-add nothing and inflate an already table-heavy index.
+add nothing and inflate an already table-heavy index. Not built; it is a single parameter and
+re-chunking is milliseconds, but it is meaningless to tune without a relevance signal.
 
-**3. Block classification is crude.** The chunker labels any block of ≤10 words a title, so
-`"El riesgo es alto."` becomes a section header. The thresholds are unvalidated constants.
-*Decision: remove it entirely* — structure detection belongs to extraction, and titles should
-come from real markers or the catalog, never from word-count guesses.
+**3. Block classification is crude. [FIXED]** The chunker labelled any block of ≤10 words a
+title, so `"El riesgo es alto."` became a section header — and a single-block CSV made a
+4,170-word table a "title". Removed entirely along with `clean()` and `agrupar_secciones()`;
+structure detection belongs to extraction and titles come from the catalog. Note the failure
+mode this produced while it was still in place: because a title-only section emitted no chunks
+under the new packer, three csv/xlsx documents disappeared from the index completely. Silent
+document loss is the characteristic damage of heuristic classification.
 
 **4. Document aggregation is untested.** Max-pooling is chosen on sound reasoning, but there is
 no ground truth to validate it against. It determines F1@3, which is half the score.
@@ -670,8 +809,10 @@ plumbed, but unjustifiable without validation data.
 document with a word floor, abstaining rather than guessing on short text. It is still
 unreliable on code-mixed documents, and every chunk inherits the document's label.
 
-**8. MEASURED: 44% of indexed text never reaches a vector.** This was a theoretical risk until
-the end-to-end run measured it, and the answer is far worse than expected.
+**8. MEASURED: 44% of indexed text never reached a vector. [FIXED]** This was a theoretical
+risk until the end-to-end run measured it, and the answer was far worse than expected. It is
+kept here in full because it is the most instructive finding in the project: the failure was
+completely silent, and only a measurement found it.
 
 `num_tokens` against the 512-token encoder ceiling, on a real 326-chunk index:
 
@@ -690,9 +831,19 @@ This is a §4.3 violation, and it is invisible without measuring: retrieval stil
 valid, plausible answers because the surviving first 512 tokens are real text. Nothing errors.
 Nearly half the corpus is simply not searchable.
 
-*It also proves the two pending chunker fixes are load-bearing rather than tidying.* After
-they land, re-measure; target p99 under 512, and lower `MAX_WORDS` if it still runs close —
-before the full encode, since that parameter invalidates every downstream artifact.
+**Resolved by two changes, one at each end.** `CSVExtractor`/`ExcelExtractor`/`PBFExtractor`
+now separate rows with a blank line, so a tabular file is many blocks instead of one; and the
+chunker packs sentences under a 506-token cap alongside the 250-word cap. Re-measured on the
+same corpus:
+
+| | p50 | p95 | p99 | max | over ceiling | discarded |
+|---|---|---|---|---|---|---|
+| before | 295 | 1,141 | 5,098 | 8,947 | 29.1% | 43.8% |
+| after | 357 | 443 | 499 | **504** | **0%** | **0%** |
+
+The lesson worth keeping: the reason this went unnoticed is that *nothing failed*. Retrieval
+returned valid, plausible answers the whole time, because the surviving first 512 tokens are
+real text. A silent 44% loss looks exactly like a working system from the outside.
 
 **9. Flat index, no approximate alternative evaluated.** Deliberate — §5.2 endorses flat at this
 scale and it stays fast at 110,000 vectors.
@@ -709,10 +860,16 @@ re-encodes but never re-extracts.
 ```bash
 # Component self-checks — no GPU, no model download, no network
 python extraccion_final.py            # 17 JSON fixtures + catalog matching
+python chunker.py                     # caps, sentence boundaries, escalera, Table 1
+python pipeline_final.py selftest     # 11 checks incl. resume and §1.4 alignment
 python generador.py selftest          # 11 checks incl. standalone delivery
+python inventario.py selftest         # the 1,826-row join key
 
-# Index a corpus (once pipeline_final.py exists)
-python pipeline_final.py index --corpus "CORPUS CODEFEST AD ASTRA 2026" --encoder e5
+# Reconcile a corpus tree against ADL's inventory
+python inventario.py "CORPUS CODEFEST AD ASTRA 2026"
+
+# Index a corpus. --sample N for a dry run; both caches make reruns cheap.
+python pipeline_final.py --corpus "CORPUS CODEFEST AD ASTRA 2026" --batch-size 64
 
 # Produce the answers
 python generador.py \
@@ -721,15 +878,25 @@ python generador.py \
   --queries  Extracto_Preguntas_50_v2.pdf \
   --out      entrega/resultados.jsonl
 
-# On a Colab T4
-./colab_generador.sh
+# The whole thing on a Colab T4: uploads, selftests, reconciliation, index,
+# generador, validation, then pulls the artifacts back
+./_gentest/run_step7.sh
 ```
+
+`pipeline_final.py` writes `run_manifest.json` next to the delivery. It carries every number
+Spec 03 asks to be measured — per-stage wall time, escalera hits per level, `num_tokens`
+percentiles, chunks per format, documents with zero chunks, library versions and the pinned
+model revision — so a run can be audited after the fact instead of re-run.
 
 ### Environment traps that will cost you an afternoon
 
-- **`sentence-transformers` does not import on the Windows development machine** — pyarrow
-  trips an Application Control policy. All local testing therefore uses stub encoders; real
-  encoding happens on Colab.
+- **`sentence-transformers` needs `pyarrow`**, which is not installed by default here.
+  `pip install pyarrow` fixes it. The older note that it *cannot* import on this machine is
+  wrong: it imports, and both the tokenizer and the full model run locally on CPU. That
+  mistaken belief is why chunking originally budgeted in words alone.
+- **The Colab session disappears when idle.** `colab sessions` reporting *"No active sessions
+  found on server"* is normal, not an outage — `colab new -s gentest --gpu T4` recreates it.
+  Uploads fail with a bare `FAIL` when the session is gone, which reads like a path bug.
 - **Git Bash rewrites `/content/...` into `C:/Program Files/Git/content/...`** on its way to
   the Colab CLI. Set `MSYS_NO_PATHCONV=1`.
 - **…but that also stops *local* paths converting**, so with it set, local paths must be

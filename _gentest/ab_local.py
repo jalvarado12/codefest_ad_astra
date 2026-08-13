@@ -13,6 +13,7 @@ Both go through the real generador.py and the real validator, so the comparison
 covers retrieval output, not just chunk statistics.
 """
 import json
+import os
 import subprocess
 import sys
 import time
@@ -115,6 +116,15 @@ estadisticas("DESPUES", despues)
 def construir(nombre, chunks):
     carpeta = OUT / nombre
     carpeta.mkdir(parents=True, exist_ok=True)
+
+    # Encoding e5-large on CPU costs ~20 min per side. REUSE=antes,despues skips
+    # any side whose index already matches the chunk count it would produce.
+    if nombre in os.environ.get("REUSE", "").split(","):
+        idx = carpeta / "index.faiss"
+        if idx.exists() and faiss.read_index(str(idx)).ntotal == len(chunks):
+            log(f"== reusing {nombre} index ({len(chunks)} chunks) ==")
+            return carpeta
+        log(f"== {nombre} index missing or stale, rebuilding ==")
 
     for c in chunks:
         c["num_tokens"] = contar_tokens(c["texto"])

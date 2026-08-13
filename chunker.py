@@ -1,22 +1,13 @@
 """
-Reference chunker for the CODEFEST Etapa 1 pipeline.
+Chunker for the CODEFEST Etapa 1 pipeline. Chunking only.
 
-Pipeline:
-    registro
-        -> limpieza
-        -> separación en bloques
-        -> clasificación TITLE / PARAGRAPH
-        -> agrupación por secciones
-        -> generación de chunks
+Cleaning and structure detection are extraction concerns and live in
+`extraccion_final.py` (Decisions 3 and 9): `clean_text()` there normalises
+Unicode, strips control characters and removes repeated-line boilerplate, and
+every adapter separates its own logical units with a blank line. This module
+takes the already-clean text and does one thing: turn it into chunks.
 
-The chunker preserves:
-    - document structure
-    - section titles
-    - complete sentences
-    - total word count
-    - maximum chunk size
-
-Chunks are packed at sentence granularity under two caps at once: MAX_WORDS
+Chunks are packed at sentence granularity under two caps at once, MAX_WORDS
 (Sec. 9.2's return limit) and MAX_TOKENS (the encoder's input limit, Sec. 4.3).
 A chunk closes *before* the sentence that would overflow either cap, which is
 what Sec. 3.3 prescribes verbatim: "si se fija un tamano maximo de n tokens, el
@@ -24,18 +15,18 @@ corte efectivo debe retroceder al final de la ultima oracion completa que quepa
 dentro de ese limite".
 
 A sentence is never cut. A unit that overflows on its own is segmented by the
-escalera (clauses, pipes, list markers, newlines); whatever still overflows
-after all five levels is emitted intact and over the cap, because Sec. 3.3 is a
-"Requisito obligatorio" and Sec. 4.3 only asks that fragments be *designed* not
-to exceed the limit. The encoder truncates those; nothing else in the delivery
-breaks.
+escalera (clauses, pipes, list markers, newlines, commas); whatever still
+overflows after all five levels is emitted intact and over the cap, because
+Sec. 3.3 is a "Requisito obligatorio" while Sec. 4.3 only asks that fragments be
+*designed* not to exceed the limit. The encoder truncates those; nothing else in
+the delivery breaks. ESCALERA_HITS counts what each level caught so dead levels
+can be deleted after the dry run.
 
-The section title is included in the chunk text and metadata.
+Every chunk carries the eight Tabla-1 fields under the spec's own names --
+note `texto` here, against `text` in resultados.jsonl (Tabla 2).
 """
 
 import re
-import unicodedata
-
 
 
 # CONFIGURATION
@@ -48,167 +39,16 @@ MAX_TOKENS = 506
 
 
 
-# CLEANING
-def clean(text):
-    """
-    Normalize text before structural processing.
-
-    - NFC Unicode normalization
-    - remove control characters
-    - normalize spaces
-    - normalize excessive blank lines
-    """
-    text = unicodedata.normalize("NFC", text)
-
-    text = "".join(
-        ch
-        for ch in text
-        if ch == "\n"
-        or ch == "\t"
-        or not unicodedata.category(ch).startswith("C")
-    )
-
-    text = re.sub(r"[ \t ]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-
-    return text.strip()
-
-
-
-# BLOCK IDENTIFICATION
+# BLOCK SEPARATION
 def separar_bloques(texto):
     """
-    Separate a document into blocks using blank lines.
+    Split already-clean text into blocks on blank lines.
+
+    Every extractor emits its logical units blank-line separated: one CSV row,
+    one spreadsheet row, one PDF paragraph, one PBF element. No cleaning happens
+    here -- extraccion_final.clean_text() is the only cleaner (Decision 9).
     """
-    texto = clean(texto)
-
-    bloques = [
-        bloque.strip()
-        for bloque in texto.split("\n\n")
-        if bloque.strip()
-    ]
-
-    return bloques
-
-
-
-# BLOCK CLASSIFICATION
-def clasificar_bloques(bloques):
-    """
-    Classify blocks as TITLE or PARAGRAPH.
-
-    Rules:
-
-    1. The first block is always TITLE.
-
-    2. Short blocks without final punctuation are TITLE.
-
-    3. Short questions are TITLE.
-
-    4. Very short blocks are TITLE.
-
-    5. Blocks longer than 20 words are PARAGRAPH.
-
-    The output uses the keys expected by the rest of the pipeline:
-        - text
-        - type
-    """
-
-    bloques_clasificados = []
-
-    for i, bloque in enumerate(bloques):
-        texto = bloque.strip()
-
-        # Rule 1: first block is always the title
-        if i == 0:
-            tipo = "TITLE"
-
-        else:
-
-            palabras = texto.split()
-            n_palabras = len(palabras)
-
-            # Default
-            tipo = "PARAGRAPH"
-
-            # Short block without final punctuation
-            if n_palabras <= 15:
-                if not texto.endswith(
-                    (".", "!", "?", ";", ":")
-                ):
-                    tipo = "TITLE"
-
-            # Short question
-            if n_palabras <= 20 and texto.endswith("?"):
-                tipo = "TITLE"
-
-            # Very short block
-            if n_palabras <= 10:
-                tipo = "TITLE"
-
-            # Long blocks are paragraphs
-            if n_palabras > 20:
-                tipo = "PARAGRAPH"
-
-        bloques_clasificados.append({
-            "text": texto,
-            "type": tipo
-        })
-
-    return bloques_clasificados
-
-
-
-# SECTION IDENTIFICATION
-def agrupar_secciones(bloques_clasificados):
-    """
-    Group paragraphs under their corresponding title.
-
-    Returns a list with the structure:
-
-        [
-            {
-                "title": "...",
-                "content": [
-                    {"text": "...", "type": "PARAGRAPH"},
-                    ...
-                ]
-            },
-            ...
-        ]
-
-    A section starts whenever a TITLE is encountered.
-    """
-
-    secciones = []
-
-    titulo_actual = None
-    contenido_actual = []
-
-    for bloque in bloques_clasificados:
-        if bloque["type"] == "TITLE":
-
-            # Save previous section
-            if titulo_actual is not None:
-                secciones.append({
-                    "title": titulo_actual,
-                    "content": contenido_actual
-                })
-
-            titulo_actual = bloque["text"]
-            contenido_actual = []
-
-        else:
-            contenido_actual.append(bloque)
-
-    # Save final section
-    if titulo_actual is not None:
-        secciones.append({
-            "title": titulo_actual,
-            "content": contenido_actual
-        })
-
-    return secciones
+    return [b.strip() for b in (texto or "").split("\n\n") if b.strip()]
 
 
 
@@ -221,7 +61,7 @@ _ABREVIATURAS = {
     "etc", "vs", "fig", "figs", "tab", "cf", "ej", "aprox", "máx", "mín",
     "inc", "ltd", "co", "corp", "st", "mr", "mrs", "ms", "jr", "vol",
     "ed", "eds", "al", "ee", "uu", "ss", "cap", "sec", "ref", "op", "cit",
-    "depto", "dpto", "tel", "esq", "ing", "adm", "gob", "univ",
+    "depto", "dpto", "tel", "esq", "adm", "gob", "univ",
 }
 
 # Sentence-final punctuation, any closing quotes or brackets, then whitespace.
@@ -238,6 +78,7 @@ def _es_abreviatura(texto, fin):
     """True when the period at `fin` closes an abbreviation, an initial or a
     decimal rather than a sentence."""
     m = _PALABRA_PREVIA.search(texto[:fin])
+
     if not m:
         return False
 
@@ -272,7 +113,7 @@ def separar_oraciones(texto):
     sentence start. Missing a boundary costs a longer unit, which the escalera
     handles; inventing one cuts a sentence in half and breaks Sec. 3.3.
     """
-    texto = texto.strip()
+    texto = (texto or "").strip()
 
     if not texto:
         return []
@@ -308,34 +149,45 @@ def separar_oraciones(texto):
 
 # OVERSIZED UNIT SEGMENTATION
 # The five-level escalera, in order of how much meaning the cut destroys.
-# Every offender measured in the corpus (abbreviation tables, figure captions,
-# org charts, "| URL: ... |" field runs) is reached by one of these.
 _ESCALERA = [
-    re.compile(r'(?<=[;:])\s+'),                                   # clauses
-    re.compile(r'\s*\|\s*'),                                       # pipe runs
-    re.compile(r'\n(?=\s*(?:[-*•·—–]|\(?\d+[.)]|[a-zA-Z][.)])\s)'),  # list markers
-    re.compile(r'\n+'),                                            # newlines
-    re.compile(r'(?<=,)\s+'),                                      # commas
+    ("clausulas", re.compile(r'(?<=[;:])\s+')),
+    ("pipes", re.compile(r'\s*\|\s*')),
+    ("marcadores", re.compile(r'\n(?=\s*(?:[-*•·—–]|\(?\d+[.)]|[a-zA-Z][.)])\s)')),
+    ("saltos", re.compile(r'\n+')),
+    ("comas", re.compile(r'(?<=,)\s+')),
 ]
+
+# Per-level hit counters. Step 1 check 6: measure during the dry run and delete
+# every level that fires zero times before committing to the full corpus run.
+ESCALERA_HITS = {nombre: 0 for nombre, _ in _ESCALERA}
+ESCALERA_HITS["residuo"] = 0
+
+
+def reiniciar_contadores():
+    """Zero the escalera counters. Call once per run before chunking."""
+    for k in ESCALERA_HITS:
+        ESCALERA_HITS[k] = 0
 
 
 def _segmentar(unidad, cabe):
     """
     Reduce an oversized unit to pieces that fit, walking the escalera.
 
-    Returns the unit untouched when no level splits it. That unit then goes
-    into the index over the cap and the encoder truncates it -- the deliberate
-    choice from Sec. 3.3 ("Requisito obligatorio", absolute) over Sec. 4.3
-    ("deben disenarse", a design obligation).
+    Returns the unit untouched when no level splits it, counted as `residuo`.
+    That unit goes into the index over the cap and the encoder truncates it --
+    the deliberate choice of Sec. 3.3 ("Requisito obligatorio", absolute) over
+    Sec. 4.3 ("deben disenarse", a design obligation).
     """
     if cabe(unidad):
         return [unidad]
 
-    for separador in _ESCALERA:
+    for nombre, separador in _ESCALERA:
         piezas = [p.strip() for p in separador.split(unidad) if p.strip()]
 
         if len(piezas) < 2:
             continue
+
+        ESCALERA_HITS[nombre] += 1
 
         salida = []
 
@@ -343,6 +195,8 @@ def _segmentar(unidad, cabe):
             salida.extend(_segmentar(pieza, cabe))
 
         return salida
+
+    ESCALERA_HITS["residuo"] += 1
 
     return [unidad]
 
@@ -369,8 +223,8 @@ def _contador(contar_tokens):
 
 
 def _unir(piezas, bloques):
-    """Join units back into chunk text, keeping the paragraph break whenever
-    the source block changes."""
+    """Join units back into chunk text, keeping the blank line wherever the
+    source block changes so paragraph structure survives."""
     if not piezas:
         return ""
 
@@ -383,9 +237,9 @@ def _unir(piezas, bloques):
     return "".join(salida)
 
 
-def _unidades(bloques_seccion, tokens_de):
-    """Flatten a section into atomic units: sentences, with any oversized one
-    run through the escalera."""
+def _unidades(bloques, tokens_de):
+    """Flatten blocks into atomic units: sentences, with any oversized one run
+    through the escalera."""
     def cabe(texto):
         return (
             len(texto.split()) <= MAX_WORDS
@@ -394,59 +248,46 @@ def _unidades(bloques_seccion, tokens_de):
 
     unidades = []
 
-    for i, bloque in enumerate(bloques_seccion):
-        for oracion in separar_oraciones(bloque["text"]):
+    for i, bloque in enumerate(bloques):
+        for oracion in separar_oraciones(bloque):
             for unidad in _segmentar(oracion, cabe):
                 unidades.append({
-                    "text": unidad,
+                    "texto": unidad,
                     "n_words": len(unidad.split()),
                     "n_tokens": tokens_de(unidad),
-                    "bloque": i
+                    "bloque": i,
                 })
 
     return unidades
 
 
-def generar_chunks_seccion(titulo, bloques_seccion, contar_tokens=None):
+def generar_chunks(bloques, contar_tokens=None):
     """
-    Generate chunks for a single section.
+    Pack blocks into chunks under both caps at once.
 
-    The title is included in the first chunk of the section and counted in both
-    budgets. A sentence is never split across chunks.
-
-    contar_tokens is a callable text -> int counting raw content tokens (no
-    "passage: " prefix, no special tokens). None leaves the token cap inactive.
+    Returns [{texto, n_words, num_tokens}]; identity fields are stamped by
+    procesar_documento. A sentence is never split across two chunks.
     """
     tokens_de = _contador(contar_tokens)
-    unidades = _unidades(bloques_seccion, tokens_de)
+    unidades = _unidades(bloques, tokens_de)
 
     chunks = []
 
     piezas = []
-    bloques = []
+    origen = []
     palabras = 0
     tokens = 0
 
-    # ponytail: token budget is summed per unit rather than re-tokenising the
-    # joined chunk on every candidate. Independent tokenisation loses the
+    # ponytail: the token budget is summed per unit rather than re-tokenising
+    # the joined chunk on every candidate. Independent tokenisation loses the
     # cross-boundary subword merges, so the sum over-counts slightly -- it errs
     # toward smaller chunks, never toward blowing the ceiling. Re-tokenise the
     # candidate string if chunk sizes ever need to be tight.
-    if titulo:
-        piezas.append(titulo)
-        bloques.append(None)
-        palabras = len(titulo.split())
-        tokens = tokens_de(titulo)
-
-    def vacio():
-        """Nothing but the title has landed in the accumulator yet."""
-        return not piezas or (len(piezas) == 1 and bloques[0] is None)
-
     def cerrar():
         chunks.append({
-            "title": titulo,
-            "text": _unir(piezas, bloques),
-            "n_words": palabras
+            "texto": _unir(piezas, origen),
+            "n_words": palabras,
+            "num_tokens": tokens,
         })
 
     for unidad in unidades:
@@ -455,135 +296,86 @@ def generar_chunks_seccion(titulo, bloques_seccion, contar_tokens=None):
             or tokens + unidad["n_tokens"] > MAX_TOKENS
         )
 
-        if desborda:
-            # A title-only accumulator has nothing to emit. The title is our own
-            # addition, not a Tabla-1 obligation, so rather than push the chunk
-            # over the cap it is dropped here; it survives in chunk metadata.
-            if not vacio():
-                cerrar()
-
-            piezas, bloques = [], []
+        if desborda and piezas:
+            cerrar()
+            piezas, origen = [], []
             palabras = tokens = 0
 
-        piezas.append(unidad["text"])
-        bloques.append(unidad["bloque"])
+        piezas.append(unidad["texto"])
+        origen.append(unidad["bloque"])
         palabras += unidad["n_words"]
         tokens += unidad["n_tokens"]
 
-    if not vacio():
+    if piezas:
         cerrar()
 
     return chunks
-
-
-def generar_chunks(secciones, contar_tokens=None):
-    """
-    Generate chunks for all document sections.
-    """
-
-    todos_los_chunks = []
-
-    for seccion in secciones:
-        titulo = seccion["title"]
-        bloques_seccion = seccion["content"]
-
-        chunks_seccion = generar_chunks_seccion(
-            titulo,
-            bloques_seccion,
-            contar_tokens
-        )
-
-        todos_los_chunks.extend(chunks_seccion)
-
-    return todos_los_chunks
 
 
 
 # DOCUMENT PROCESSING
 def procesar_documento(registro, contar_tokens=None):
     """
-    Process one JSONL document through the complete chunking pipeline.
+    Chunk one extracted document.
 
-    Expected input fields:
-        - doc_id
-        - fuente
-        - texto
+    `registro` is what `extraccion_final.generar_documentos()` yields:
+        doc_id, fuente, formato, fenomeno, texto_limpio, metadata_catalogo
 
-    Returns:
+    Optional fields are carried through when present: `idioma` and any
+    `catalogo_*` scalars flattened by extraction (Decision 12).
 
-        {
-            "doc_id": ...,
-            "fuente": ...,
-            "n_words_original": ...,
-            "n_bloques": ...,
-            "n_secciones": ...,
-            "n_chunks": ...,
-            "chunks": [...]
-        }
+    Returns the document summary plus its chunks, each carrying the eight
+    Tabla-1 fields. `num_tokens` is real when contar_tokens is supplied and 0
+    otherwise; the indexing step stamps it definitively at embed time.
     """
-
-  
-    # 1. Document information
     doc_id = registro.get("doc_id")
-    fuente = registro.get("fuente")
-    texto = registro.get("texto", "")
+    fuente = (registro.get("fuente") or "").replace("\\", "/")
+    formato = registro.get("formato")
+    fenomeno = registro.get("fenomeno")
+    texto = registro.get("texto_limpio", registro.get("texto", ""))
 
+    extra = {k: v for k, v in registro.items() if k.startswith("catalogo_")}
 
-    # 2. Clean and separate blocks
+    if registro.get("idioma") is not None:
+        extra["idioma"] = registro["idioma"]
+
     bloques = separar_bloques(texto)
+    chunks = generar_chunks(bloques, contar_tokens)
 
-
-    # 3. Classify blocks
-    bloques_clasificados = clasificar_bloques(
-        bloques
-    )
-
-    
-    # 4. Group blocks into sections
-    secciones = agrupar_secciones(
-        bloques_clasificados
-    )
-
-
-    # 5. Generate chunks
-    chunks = generar_chunks(
-        secciones,
-        contar_tokens
-    )
-
-
-    # 6. Add chunk identifiers
     for i, chunk in enumerate(chunks):
-        chunk["chunk_id"] = (
-            f"{doc_id}-chunk-{i:04d}"
-        )
-
+        chunk.update(extra)
+        chunk["doc_id"] = doc_id
+        chunk["chunk_id"] = f"{doc_id}-chunk-{i:05d}"
+        chunk["fuente"] = fuente
+        chunk["nombre_archivo"] = fuente.rsplit("/", 1)[-1]
+        chunk["formato"] = formato
+        # Tabla 1 types fenomeno as an integer; 0 means "outside the three".
+        chunk["fenomeno"] = fenomeno if fenomeno is not None else 0
         chunk["posicion"] = i
 
- 
-    # 7. Document statistics
-    n_words_original = len(
-        texto.split()
-    )
-
-
-    # 8. Return complete result
     return {
         "doc_id": doc_id,
         "fuente": fuente,
-        "n_words_original": n_words_original,
+        "formato": formato,
+        "n_words_original": len(texto.split()),
         "n_bloques": len(bloques),
-        "n_secciones": len(secciones),
         "n_chunks": len(chunks),
-        "chunks": chunks
+        "chunks": chunks,
     }
 
 
 
 # SELF-CHECK
+_TABLA_1 = {"doc_id", "chunk_id", "fuente", "formato",
+            "fenomeno", "posicion", "num_tokens", "texto"}
+
+
 def _demo():
     """The smallest set of assertions that fails if the dual cap, the sentence
-    boundary rule or the escalera breaks. Run: python chunker.py"""
+    boundary rule, the escalera or the Tabla-1 contract breaks.
+
+    Run: python chunker.py
+    """
 
     # -- sentence splitting does not cut on abbreviations, initials, decimals --
     assert separar_oraciones("El Dr. Ruiz llego. Se fue.") == \
@@ -594,46 +386,85 @@ def _demo():
         ["Segun J. Smith el dato es firme."]
     assert separar_oraciones("") == []
 
+    # -- cleaning is NOT this module's job: blocks come through verbatim ------
+    assert separar_bloques("Uno\n\n\nDos") == ["Uno", "Dos"]
+    assert separar_bloques("") == []
+
     # -- a chunk closes BEFORE the sentence that would overflow ---------------
     oracion = "Palabra " + " ".join(["palabra"] * 99) + "."
-    bloques = [{"text": " ".join([oracion] * 6), "type": "PARAGRAPH"}]
-    chunks = generar_chunks_seccion("Titulo", bloques)
+    chunks = generar_chunks([" ".join([oracion] * 6)])
 
     assert chunks, "no chunks produced"
     assert all(c["n_words"] <= MAX_WORDS for c in chunks), \
         [c["n_words"] for c in chunks]
 
     # every sentence survives whole, in order, across the chunk boundaries
-    unido = " ".join(c["text"] for c in chunks)
+    unido = " ".join(c["texto"] for c in chunks)
     assert unido.count(oracion) == 6, unido.count(oracion)
 
     # -- the token cap binds independently of the word cap -------------------
-    corto = [{"text": "Uno dos tres. Cuatro cinco seis. Siete ocho nueve.",
-              "type": "PARAGRAPH"}]
-    caro = generar_chunks_seccion("", corto, contar_tokens=lambda t: 200 * len(t.split()))
-    assert len(caro) == 3, [c["text"] for c in caro]
+    caro = generar_chunks(["Uno dos tres. Cuatro cinco seis. Siete ocho nueve."],
+                          contar_tokens=lambda t: 200 * len(t.split()))
+    assert len(caro) == 3, [c["texto"] for c in caro]
 
     # -- escalera reaches a pipe run that no sentence boundary touches -------
-    campos = " | ".join(f"URL: recurso-{i}" for i in range(300))
+    # Pipes are level 3: clauses (; :) come first per Step 1's ladder order, so
+    # this fixture deliberately carries no colon.
+    reiniciar_contadores()
+    campos = " | ".join(f"recurso-{i}" for i in range(300))
     piezas = _segmentar(campos, lambda t: len(t.split()) <= MAX_WORDS)
     assert len(piezas) > 1, "escalera failed to split a pipe run"
     assert all(len(p.split()) <= MAX_WORDS for p in piezas)
+    assert ESCALERA_HITS["pipes"] > 0, ESCALERA_HITS
+
+    # a real CSV field run carries colons, so clauses catch it one level earlier
+    reiniciar_contadores()
+    con_colon = " | ".join(f"URL: recurso-{i}" for i in range(300))
+    piezas = _segmentar(con_colon, lambda t: len(t.split()) <= MAX_WORDS)
+    assert all(len(p.split()) <= MAX_WORDS for p in piezas)
+    assert ESCALERA_HITS["clausulas"] > 0 and ESCALERA_HITS["residuo"] == 0, ESCALERA_HITS
 
     # -- residue that no level splits is returned intact, never cut ----------
+    reiniciar_contadores()
     atomica = " ".join(["x"] * 400)
     assert _segmentar(atomica, lambda t: len(t.split()) <= MAX_WORDS) == [atomica]
+    assert ESCALERA_HITS["residuo"] == 1, ESCALERA_HITS
 
-    # -- end to end ----------------------------------------------------------
-    doc = procesar_documento({
-        "doc_id": "DOC-001",
-        "fuente": "prueba.pdf",
-        "texto": "Titulo de prueba\n\n" + " ".join([oracion] * 6),
-    })
-    assert doc["n_chunks"] == len(doc["chunks"])
-    assert all(c["chunk_id"].startswith("DOC-001-chunk-") for c in doc["chunks"])
+    # -- a blank-line separated table yields many chunks, not one ------------
+    # This is the shape extraccion_final must emit for csv/xlsx/pbf (Step 2
+    # fix 1); with single newlines it collapses to one block and one chunk.
+    tabla = "\n\n".join(f"Year: {2000+i} | Count: {i * 137}" for i in range(400))
+    doc = procesar_documento({"doc_id": "DOC-0001", "fuente": r"a\b\t.csv",
+                              "formato": "csv", "fenomeno": 2,
+                              "texto_limpio": tabla})
+    assert doc["n_chunks"] > 1, f"table collapsed into {doc['n_chunks']} chunk(s)"
+    assert all(c["n_words"] <= MAX_WORDS for c in doc["chunks"])
+    assert "Year: 2399" in " ".join(c["texto"] for c in doc["chunks"]), \
+        "tail of the table was dropped"
+
+    # -- Tabla-1 contract ----------------------------------------------------
+    for c in doc["chunks"]:
+        faltantes = _TABLA_1 - set(c)
+        assert not faltantes, faltantes
+        assert isinstance(c["fenomeno"], int) and isinstance(c["posicion"], int)
+        assert "text" not in c, "Tabla 1 names the field 'texto', not 'text'"
+
+    assert doc["fuente"] == "a/b/t.csv", doc["fuente"]
+    assert doc["chunks"][0]["nombre_archivo"] == "t.csv"
     assert [c["posicion"] for c in doc["chunks"]] == list(range(doc["n_chunks"]))
+    assert doc["chunks"][7]["chunk_id"] == "DOC-0001-chunk-00007"
 
-    print(f"OK  {len(chunks)} chunks, max {max(c['n_words'] for c in chunks)} words")
+    # -- optional passthrough ------------------------------------------------
+    con_extra = procesar_documento({"doc_id": "DOC-0002", "fuente": "x.pdf",
+                                    "formato": "pdf", "fenomeno": None,
+                                    "idioma": "es", "catalogo_title": "T",
+                                    "texto_limpio": "Una frase corta."})
+    assert con_extra["chunks"][0]["idioma"] == "es"
+    assert con_extra["chunks"][0]["catalogo_title"] == "T"
+    assert con_extra["chunks"][0]["fenomeno"] == 0, "None fenomeno must become 0"
+
+    print(f"OK  {len(chunks)} chunks from the packer, "
+          f"{doc['n_chunks']} from the table, escalera={ESCALERA_HITS}")
 
 
 if __name__ == "__main__":

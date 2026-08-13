@@ -9,21 +9,40 @@ are marked **[A]**, and the one rejected finding is argued in Step 2.
 
 ---
 
-## Step 0 — File hygiene
+## Step 0 — File hygiene — **mostly done**
 
-- `chunker.py` is 0 bytes. Delete it and rename `chunker (1).py` → `chunker.py`; the
-  parenthesised name breaks `import chunker`.
-- `.gitignore`: `cache/`, `vectors/`, `entrega/`.
+- ~~`chunker.py` is 0 bytes. Delete it and rename `chunker (1).py` → `chunker.py`~~ — done.
+- ~~`.gitignore`: `cache/`, `vectors/`, `entrega/`~~ — done.
+- **`requirements.txt` is still unpinned and still omits `torch` and `sentence-transformers`.
+  STILL OPEN**, and it is the one Step 0 item that is graded.
 - **[A] Pin `requirements.txt`.** No version is currently pinned, and `torch` and
   `sentence-transformers` are missing entirely. §1.4 makes reproduction a pass/fail gate, so
   pin exact versions and record the model **revision**, not just its id.
 
 ---
 
-## Step 1 — `chunker.py`: strip to chunking only
+## Step 1 — `chunker.py`: strip to chunking only — **DONE 2026-08-13**
 
 **Decision 3:** block classification and cleaning are extraction concerns already handled in
 `extraccion_final.py`.
+
+> **As built.** `clean()`, `clasificar_bloques()` and `agrupar_secciones()` removed;
+> `separar_bloques()` is now a plain `"\n\n"` split with no cleaning. Packing is at **sentence**
+> granularity under a **dual cap** — `MAX_WORDS = 250` and `MAX_TOKENS = 506` — closing a chunk
+> before the sentence that would overflow either, which is §3.3's own prescription. All eight
+> Tabla-1 fields are stamped with the spec's names. The escalera has per-level counters
+> (`ESCALERA_HITS`) surfaced in `run_manifest.json`. Residue is emitted intact rather than
+> hard-cut; see Spec 03 §5 for why §4.3 yields to §3.3 there.
+>
+> Measured on the sample corpus: chunks over the encoder ceiling **29.1% → 0%**, indexed text
+> silently truncated **43.8% → 0%**, max chunk 8,947 → 504 tokens, escalera residue 0.
+>
+> **Item 5 (overlap) was NOT built.** It remains open; see Spec 03 §B4.
+>
+> **One trap this uncovered.** Removing the classifier is not optional tidying. While it was
+> still in place, a whole-file CSV was classified as a TITLE, and a title-only section produced
+> no chunks under the new packer — three csv/xlsx documents silently disappeared from the index.
+> Heuristic classification fails by deleting data, not by erroring.
 
 ### Remove
 
@@ -115,7 +134,21 @@ catalog-matched documents (Step 2 item 5). Everything else has no title, which i
 
 ---
 
-## Step 2 — `extraccion_final.py`
+## Step 2 — `extraccion_final.py` — **DONE 2026-08-13**
+
+> **As built.** Fixes 1–7 all landed. Row joins go through the named constant `_UNION_FILAS`
+> (`"\n\n"`) in `CSVExtractor`, `ExcelExtractor` and `PBFExtractor`. `PBFExtractor` now emits
+> **one document per `.pbf`** and is registered in `_DISPATCH` like every other adapter, so the
+> tileset grouping helpers (`_agrupar_tilesets_pbf`, `_localizar_raiz_tileset`) are gone.
+> `_empaquetar` adds `nombre_archivo`, `idioma` (seeded, ≥50 words, `None` otherwise),
+> `adl_doc_id` from the inventory, and flattened `catalogo_*` scalars. `_NO_CORPUS` excludes the
+> three non-corpus files. `fuente` is normalised to POSIX at packing time.
+>
+> Verified on the sample corpus: 25 documents, **0 errors**, and the worst offender — a 25 KB
+> CSV that was one 4,170-word / 8,947-token chunk — is now 23 chunks of ≤250 words.
+>
+> **`catalogo_*` is built but unverified**: the 25-file sample contains none of the 20 catalog
+> files, so zero chunks carried those fields. It needs a full-corpus run to exercise.
 
 **1. Row joins → `\n\n` [CONFIRMED ON REAL DATA]** in `CSVExtractor`, `ExcelExtractor`, and
 `PBFExtractor`'s element lines. Without it every CSV/XLSX is a single block and a single chunk
@@ -189,7 +222,20 @@ POSIX; `idioma` set or explicitly `None`; no excluded file present; 73 PBF docum
 
 ---
 
-## Step 3 — Inventory reconciliation
+## Step 3 — Inventory reconciliation — **DONE 2026-08-13**
+
+> **As built.** `inventario.py`. `cargar_inventario()` returns `fuente -> row` keyed on
+> `Carpeta` + `Nombre estandarizado`; `reconciliar(corpus_dir)` returns matches, inventory rows
+> with no file, and files with no row; `python inventario.py <corpus_dir>` prints the report and
+> `python inventario.py selftest` checks the key against the real spreadsheet. Column lookup is
+> accent- and case-insensitive so an encoding wobble cannot silently produce an empty
+> reconciliation. `generar_documentos(..., inventario=...)` consumes it to stamp `adl_doc_id`.
+>
+> On the 25-file sample: **25 matched, 0 files without a row.** Run again on the full corpus —
+> that direction (rows without files) is only meaningful when the tree is complete.
+>
+> **Correction to the figure below:** the 186 basename collisions span **59** distinct names,
+> not 47. The conclusion is unchanged and if anything stronger.
 
 Measured baseline (2026-08-12), so the check starts from known ground:
 
@@ -223,7 +269,25 @@ covers files the path regex misses.
 
 ---
 
-## Step 4 — `pipeline_final.py` (new)
+## Step 4 — `pipeline_final.py` (new) — **DONE 2026-08-13**
+
+> **As built.** Both caches, checkpointing, resume, `errores.jsonl`, `run_manifest.json`, and an
+> 11-check `selftest` that runs entirely offline against a deterministic fake encoder — no GPU,
+> no 2.2 GB download — so the bookkeeping that actually breaks is exercised on every commit.
+>
+> Two deviations from the sketch below, both deliberate:
+>
+> - **Encoding is owned here, with the revision pinned.** `embeddings_only.E5Dense` loads
+>   `SentenceTransformer(E5_MODEL)` with **no `revision=`**, and §1.4 makes reproduction a
+>   pass/fail gate. Depending on it would import that gap.
+> - **`np.save` wholesale at each checkpoint**, not `open_memmap`. The spec says pick one and
+>   say so: a wholesale rewrite keeps `dense.npy` and `ids.json` consistent at every flush,
+>   whereas a memmap left mid-write by a dead process leaves a torn file. 450 MB is seconds.
+>
+> `ids.json` carries `hashes` alongside `ids`, which is what makes the two reuse paths
+> distinguishable — a valid **checkpoint prefix** of the current order versus a **text-hash**
+> match anywhere in the previous run. The manifest reports `reanudados`, `reusados` and
+> `codificados` separately; conflating them hides a broken cache behind a plausible total.
 
 ```
 1. walk corpus (excluding the 3 non-corpus files)

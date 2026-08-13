@@ -51,29 +51,60 @@ way to tune it. If any validation signal becomes available, this is the first kn
 it is a single parameter and re-chunking is cheap. Note that changing it invalidates cache 2
 by fingerprint, which is by design.
 
-### 4. `num_tokens` vs the §4.3 512-token obligation — measure at the dry run, not after
+### 4. `num_tokens` vs the §4.3 512-token obligation — RESOLVED 2026-08-13
 
-Chunking budgets on **words**; `num_tokens` is stamped at embed time with the real tokenizer.
-A deliberate trade: local and Colab boundaries stay byte-identical and the tokenizer leaves
-the chunking path entirely.
+**This section previously ended with "never reintroduce a tokenizer into chunking." That
+instruction was wrong and has been reversed.** It rested on a claim that the tokenizer would
+not run on the development machine. Measured: `XLMRobertaTokenizer` loads locally at the
+pinned revision in seconds, and the full model runs on CPU too. The only thing actually
+missing was `pyarrow`.
 
-But §4.3 is an obligation, not a hint: *"los fragmentos deben diseñarse para no superar dicho
-límite"* (512 tokens). A 250-word Spanish chunk can exceed 512 tokens, and those get silently
-truncated by the encoder.
+The reasoning that followed from the false premise was sound but moot: chunking budgeted on
+words alone so that local and Colab boundaries stayed byte-identical. Pinning the tokenizer
+revision buys the same determinism without giving up the token cap — the same revision
+produces the same counts everywhere.
 
-**Corrected after audit:** measure the `num_tokens` distribution at the **Step 6 dry run**,
-not after the full Colab encode. `--sample 40` gives the shape, and `MAX_WORDS` is the one
-parameter whose change invalidates every downstream artifact — discovering a p99 near 512
-after a full run means redoing all of it. If p99 approaches 512, lower `MAX_WORDS`; never
-reintroduce a tokenizer into chunking.
+**What the chunker does now.** Two caps at once, checked per candidate sentence:
+`MAX_WORDS = 250` and `MAX_TOKENS = 506` (512 − 4 for `"passage: "` − 2 special). A chunk
+closes *before* the sentence that would overflow either. Lowering `MAX_WORDS` was considered
+and rejected as the remedy: 100% of over-ceiling chunks were in the unsplit-block path, so a
+smaller word budget would not have touched them.
 
-### 5. Hard-cut residue
+Measured on real extracted text, before and after:
 
-After five levels of segmentation (sentences → clauses → `|` → list markers → newlines), a
-unit that still exceeds 250 words is hard-cut at word 250, breaking §3.3's completeness to
-satisfy §9.3.2's hard penalty.
+| | p50 | p95 | p99 | max | over ceiling | text discarded |
+|---|---|---|---|---|---|---|
+| words only | 295 | 1,141 | 5,098 | 8,947 | 29.1% | 43.8% |
+| dual cap | 357 | 443 | 499 | **504** | **0%** | **0%** |
 
-Per the user's ruling this is a data problem — the corpus is given and cannot be changed.
+**One measurement error this exposed.** `num_tokens` was being counted with
+`add_special_tokens=False` and without the `"passage: "` prefix, so every recorded figure
+understated what the encoder actually receives by 6 tokens. The stored field still counts raw
+content — that is what Tabla 1 describes — but the *cap* now reserves those 6.
+
+### 5. Escalera residue — the hard cut was reversed 2026-08-13
+
+**Previously:** a unit still over the cap after all five levels was hard-cut at word 250,
+breaking §3.3 to satisfy §9.3.2.
+
+**Now:** it is emitted **intact and over the cap**. Re-reading the two clauses side by side,
+they are not equally binding. §3.3 is labelled *"Requisito obligatorio"* and states flatly that
+no fragment may contain an incomplete sentence. §4.3 only asks that fragments be
+*"diseñados para no superar"* the limit — a design obligation, and `num_tokens` is a stored
+field, not a graded one. Hard-cutting breaks the mandatory rule to satisfy the advisory one.
+The sentence survives; the encoder truncates its tail.
+
+The one case with no clean answer is a single sentence over **250 words**, where §9.2's hard cap
+and §9.2.1's *"sin oraciones cortadas"* contradict each other outright. There §3.3 yields,
+because §9.2 is the mechanically graded one. No such case exists in the corpus.
+
+Per the user's ruling this remains a data problem — the corpus is given and cannot be changed.
+
+**Measured residue after the escalera, on the 25-file sample: zero.** Per-level hits were
+clauses 17, pipes 1, list markers 1, newlines 0, commas 0. Levels 4 and 5 have not yet fired;
+Step 1 item 4 says to delete levels that never fire, but 25 files is too thin a sample to
+retire them on. Decide at the full-corpus dry run — `run_manifest.json` records the counters
+on every run.
 
 Measured incidence before segmentation: PDF 0.105% (max 491 w), JSON 0.722% (max 386 w), CSV
 0.045% (max 7,193 w). Inspecting every offender found **no confirmed case of genuine

@@ -1,17 +1,14 @@
 # CODEFEST AD ASTRA 2026 — Etapa 1: Base de Conocimiento
 
-Scripts de preprocesamiento de fuentes para construir la base de conocimiento
-vectorial del reto (Universidad de los Andes / Fuerza Aeroespacial Colombiana).
-El corpus vive en `CORPUS CODEFEST AD ASTRA 2026/` y agrupa documentos de los
-tres fenómenos del reto (IA en Defensa, seguridad del entorno espacial y
-dinámicas territoriales en América Latina) en distintos formatos: PDF, HTML,
-Markdown/TXT, JSON, CSV/XLSX e imágenes.
+Pipeline de recuperación semántica para el reto (Universidad de los Andes /
+Fuerza Aeroespacial Colombiana). El corpus vive en
+`CORPUS CODEFEST AD ASTRA 2026/` y agrupa documentos de los tres fenómenos
+(IA y capacidades estratégicas, seguridad del entorno espacial, dinámicas
+territoriales en América Latina) en PDF, JSON, CSV/XLSX, TXT/MD, HTML,
+imágenes y PBF.
 
-Según la especificación técnica (`CODEFEST_2026-1.pdf`), antes de fragmentar
-(chunking) y codificar (embeddings) los documentos hay que extraer su texto
-según el formato de origen y aplicar una limpieza básica (control chars,
-normalización Unicode, detección de idioma, remoción de boilerplate
-repetido). Esa limpieza es común a todos los scripts de este repo.
+La documentación completa del sistema está en **`DOCUMENTATION.md`**. Las
+especificaciones de diseño y migración, en `specs/`.
 
 ## Instalación
 
@@ -19,59 +16,105 @@ repetido). Esa limpieza es común a todos los scripts de este repo.
 pip install -r requirements.txt
 ```
 
-Para los scripts de OCR (`ocr_pdfs_vacios.py`, `ocr_imagenes_a_texto.py`)
-además se necesita **Tesseract-OCR** instalado a nivel de sistema (no es un
-paquete de pip):
+El OCR usa **EasyOCR** (paquete de pip, con pesos que se descargan en el primer
+uso). Ya no se necesita Tesseract instalado a nivel de sistema.
 
-- macOS: `brew install tesseract`
-- Windows: instalador desde https://github.com/UB-Mannheim/tesseract/wiki
+## Los cuatro programas
 
-## Pipeline unificado de extracción (`extraccion/`)
+| Archivo | Qué hace |
+|---|---|
+| `extraccion_final.py` | Corpus → texto limpio. Un adaptador por formato, patrón Adapter, todo en memoria. |
+| `chunker.py` | Texto limpio → chunks. Solo chunking. |
+| `pipeline_final.py` | Orquestador: extrae, chunkea, codifica, indexa. Con caché y reanudación. |
+| `generador.py` | Índice + consultas → `resultados.jsonl`. Se entrega y debe correr solo. |
 
-Los extractores individuales (`procesar_*.py`, `ocr_*.py`) se refactorizaron
-en un único pipeline con **patrón Adapter**, que opera 100% en memoria (sin
-archivos temporales) y es ciego al formato de origen: la capa de chunking
-solo ve un generador de diccionarios con un esquema estricto.
+Más `inventario.py`, que reconcilia el corpus contra el inventario de 1.826
+filas de ADL y aporta el `adl_doc_id`.
+
+## Uso
+
+```bash
+# Autochequeos: sin GPU, sin descargar el modelo, sin red
+python extraccion_final.py
+python chunker.py
+python pipeline_final.py selftest
+python generador.py selftest
+python inventario.py selftest
+
+# Reconciliar el corpus contra el inventario
+python inventario.py "CORPUS CODEFEST AD ASTRA 2026"
+
+# Indexar. --sample N para una corrida de prueba; los dos cachés
+# hacen que repetir salga barato.
+python pipeline_final.py --corpus "CORPUS CODEFEST AD ASTRA 2026" --batch-size 64
+
+# Responder las 50 consultas
+python generador.py \
+  --index    entrega/base_vectorial/encoder_multilingual-e5-large/index.faiss \
+  --metadata entrega/base_vectorial/encoder_multilingual-e5-large/metadata.jsonl \
+  --queries  Extracto_Preguntas_50_v2.pdf \
+  --out      entrega/resultados.jsonl
+
+# Todo en una GPU de Colab, incluidos autochequeos y validación
+./_gentest/run_step7.sh
+```
+
+`pipeline_final.py` deja un `run_manifest.json` junto a la entrega con los
+tiempos por etapa, los contadores de la escalera de segmentación, los
+percentiles de `num_tokens`, las versiones de las librerías y la revisión
+fijada del modelo.
+
+## Extracción
+
+`extraccion_final.py` es un solo archivo autocontenido. `generar_documentos()`
+hace `yield` de un documento por archivo:
 
 ```python
-from extraccion import generar_documentos
+from extraccion_final import generar_documentos
 
 for doc in generar_documentos("CORPUS CODEFEST AD ASTRA 2026"):
-    # doc = {"doc_id", "fuente", "formato", "fenomeno", "texto_limpio"}
+    # doc_id, fuente, nombre_archivo, formato, fenomeno, idioma,
+    # texto_limpio, metadata_catalogo, adl_doc_id, catalogo_*
     ...
 ```
 
-- **`extraccion/adaptadores.py`** — un `ExtractorBase.extraer(file_path) -> str`
-  por formato (PDF, CSV, Excel, TXT/MD, HTML, JSON, Imagen) más `PBFExtractor`
-  (única excepción: un tileset PBF son muchos `.pbf`, no uno). Cada adaptador
-  devuelve texto crudo; si el archivo no aporta señal (una foto sin texto, una
-  portada) devuelve `""` en vez de fallar, para que muera naturalmente en la
-  siguiente fase. El PDF cae a OCR en memoria (render de página + Tesseract)
-  cuando su capa de texto viene vacía/corta, igual que hacía antes
-  `ocr_pdfs_vacios.py` pero sin escribir un `.jsonl` intermedio.
-- **`extraccion/pipeline.py`** — el orquestador (`generar_documentos`, un
-  `yield` por documento): agrupa tilesets PBF, despacha cada archivo al
-  adaptador según su extensión, limpia el texto y arma el diccionario final.
-- **`extraccion/registro.py`** / **`extraccion/texto_utils.py`** — asignación
-  de `doc_id`, inferencia de `fenomeno` desde la ruta, y las funciones de
-  limpieza (`clean_text`, `remove_repeated_lines`, ...) compartidas por todos
-  los adaptadores.
-- **`generar_corpus.py`** — CLI de conveniencia que recorre el generador y
-  vuelca el resultado a `documentos.jsonl` (solo para inspección; el
-  consumidor real del pipeline es la capa de chunking, directo sobre el
-  generador).
+Un archivo es un documento, `.pbf` incluido: el inventario lista los 73 tiles
+como filas propias (§2.3), y un documento por tileset no calzaría con ninguna.
 
-HTML y Markdown conservan sus señales estructurales (`#`/`##` para
-encabezados, `- ` para listas) incrustadas en `texto_limpio`, para que el
-chunking jerárquico las use como guía de corte.
+Los formatos tabulares (CSV, XLSX, PBF) separan sus filas con **línea en
+blanco**, no con salto de línea. El chunker corta bloques en `"\n\n"`, así que
+con un solo salto cada archivo tabular llegaba como un bloque único y salía
+como un chunk único — el peor caso medido fueron 4.170 palabras en un chunk,
+del cual el encoder leía 512 tokens.
 
-Los scripts `procesar_*.py` y `ocr_*.py` originales se dejaron en el repo
-como referencia histórica, pero quedaron **superados** por `extraccion/`.
+## Chunking
 
-## Pendiente (según la especificación)
+`chunker.py` hace chunking y nada más: la limpieza y la detección de estructura
+son responsabilidad de la extracción.
 
-- Chunking con requisito de completitud lingüística (Sección 3.3), usando las
-  señales estructurales que ya deja `texto_limpio` en HTML/Markdown.
-- Codificación semántica (embeddings) y construcción del índice FAISS.
+Empaqueta **oraciones** bajo **dos topes a la vez** — 250 palabras (§9.2) y 506
+tokens (512 menos el prefijo `"passage: "` y los tokens especiales, §4.3) — y
+cierra el chunk *antes* de la oración que desbordaría cualquiera de los dos.
+Eso es literalmente lo que pide §3.3: *"el corte efectivo debe retroceder al
+final de la última oración completa que quepa dentro de ese límite"*.
+
+Una oración nunca se parte. Las unidades que igual desbordan (tablas de
+abreviaturas, pies de figura, corridas de campos `| URL: … |`) pasan por una
+escalera de cinco niveles; lo que sobrevive se emite intacto y por encima del
+tope, porque §3.3 es *"Requisito obligatorio"* y §4.3 solo pide que los
+fragmentos se *diseñen* para no superarlo.
+
+## Los scripts viejos
+
+Los `procesar_*.py`, `ocr_*.py`, `json_extract.py` y el paquete `extraccion/`
+quedaron **superados** por `extraccion_final.py`. Se conservan como referencia
+histórica.
+
+## Pendiente
+
+- Superposición (overlap) de 1–2 oraciones entre chunks de formatos de prosa.
+- `informe_tecnico.pdf` — es calificado, y §3.2 exige justificar explícitamente
+  la estrategia de chunking.
+- Corrida sobre el corpus completo: todo lo medido hasta ahora es sobre una
+  muestra estratificada de 25 archivos.
 - Grafo de conocimiento (componente bonus).
-- Generador de `resultados.jsonl` a partir de las consultas `q001`–`q050`.

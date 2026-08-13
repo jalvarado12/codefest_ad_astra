@@ -52,9 +52,11 @@ applies the mandatory `"query: "` / `"passage: "` prefixes by construction and e
 `count_tokens()`. `encode_texts()` and `write_vectors()` handle the batch path. Its
 `selftest` runs anywhere with stub encoders; `verify` needs the real libraries.
 
-**`chunker.py`** — the team's chunker, arrived 2026-08-12. Audited; see Spec 02 for the
-changes required. Note the file currently at `chunker.py` is 0 bytes; the real one is
-`chunker (1).py`.
+**`chunker.py`** — the team's chunker, arrived 2026-08-12. Audited, then rewritten to chunking
+only on 2026-08-13: cleaning and classification removed, sentence packing under a dual
+word/token cap, five-level escalera with counters, all eight Tabla-1 fields. Self-check passes.
+See Spec 02 Step 1 and Spec 00 §7a-bis. The 0-byte / `chunker (1).py` filename problem is long
+resolved.
 
 ### Reference material, not corpus
 
@@ -94,7 +96,11 @@ unique across all 1,826 rows. The bare basename is **not** unique.
 
 ### Not started
 
-`pipeline_final.py`, `generador.py`, the technical report, the optional knowledge graph.
+~~`pipeline_final.py`, `generador.py`~~ — both built and self-tested (2026-08-12 and
+2026-08-13). `inventario.py` added for Step 3.
+
+Remaining: the technical report, the optional knowledge graph, chunk overlap, and a
+full-corpus run.
 
 ---
 
@@ -176,14 +182,23 @@ what §1.4 grades and it is the one invariant with a dedicated test.
 
 **Cache 1 — text.** Keyed on `sha256` of source bytes. Guards extraction, which matters most
 for the ~50 OCR PDFs (minutes each). A full text-layer pass over all 760 PDFs is ~5 minutes,
-so this is a convenience for the OCR subset rather than the backbone. PBF tilesets hash the
-sorted concatenation of member file hashes.
+so this is a convenience for the OCR subset rather than the backbone. Since one `.pbf` is now
+one document, tiles hash individually like every other file.
 
-**Cache 2 — vectors.** Keyed on `chunk_id`, with a `fingerprint` guard:
-`sha256(chunker source) + MAX_WORDS + encoder`. Chunk ids are positional, so a changed
-chunker keeps the names and swaps the text underneath. On fingerprint mismatch, wipe
-`vectors/` and keep `cache/textos.jsonl` — the expensive stage survives, the cheap one is
-redone. The chunker is still in flux, so this path will be exercised.
+**Cache 2 — vectors.** Keyed on `sha256` of the **chunk text**. As built in `pipeline_final.py`.
+
+~~Keyed on `chunk_id`, with a `fingerprint` guard: `sha256(chunker source) + MAX_WORDS +
+encoder`.~~ The fingerprint scheme was dropped: it re-encoded every chunk on *any* chunker or
+parameter change, which is exactly the change being made most often. Hashing the text instead
+means only genuinely changed chunks re-encode, the whole wipe-on-mismatch mechanism disappears,
+and the overlap / `MAX_WORDS` sweeps become affordable. The hazard the fingerprint was there to
+prevent — positional chunk ids being stable names for unstable content — is handled at the
+root: chunks are never persisted, and the vector key never mentions the id.
+
+`ids.json` stores `hashes` next to `ids`, which keeps two reuse paths distinguishable: a valid
+**checkpoint prefix** of the current run's order, and a **text-hash** match anywhere in a
+previous run. `run_manifest.json` reports `reanudados`, `reusados` and `codificados` separately,
+because a total alone would hide a dead cache.
 
 ### Delivery layout (§1.4)
 

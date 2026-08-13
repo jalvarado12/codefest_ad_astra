@@ -179,9 +179,12 @@ Unmeasured: the 38 p, 36 p and 32 p ALERTAS documents, and GPU throughput.
 
 ---
 
-## 4. Chunker behaviour — `chunker (1).py`, as delivered
+## 4. Chunker behaviour — as delivered, **superseded 2026-08-13**
 
-Real extracted text, current chunker, no fixes applied.
+Historical: this is the paragraph-packing chunker before Step 1 and Step 2 landed. Kept because
+it is the baseline every "after" figure is measured against. For current behaviour see §7a-bis.
+
+Real extracted text, that chunker, no fixes applied.
 
 | Format | docs | chunks | >250 words | max chunk | collapsed to 1 block |
 |---|---|---|---|---|---|
@@ -323,6 +326,46 @@ After both, re-measure. Target: p99 under 512 and zero chunks over the ceiling. 
 approaches 512, lower `MAX_WORDS` — **before** the full-corpus encode, since that parameter
 invalidates every downstream artifact.
 
+## 7a-bis. RE-MEASURED after the fixes — 2026-08-13. **Target met.**
+
+Same sample corpus, real extraction, real tokenizer at the pinned revision.
+
+| | p50 | p95 | p99 | max | over 506 | text discarded |
+|---|---|---|---|---|---|---|
+| before (words only) | 295 | 1,141 | 5,098 | 8,947 | 29.1% | 43.8% |
+| after (dual cap) | 357 | 443 | 499 | **504** | **0 (0.000%)** | **0.00%** |
+
+Words: p50 229, p95 248, max 250, **zero** chunks over the §9.2 cap — against 114 of 326 before.
+Documents reaching the index: 25 of 25.
+
+**`MAX_WORDS` was not lowered, and lowering it would not have worked.** 100% of the
+over-ceiling chunks were in the unsplit-block path, so a smaller packing budget would not have
+touched a single one. The fix had to be splitting, not shrinking.
+
+**Escalera hit counts** (Step 1 item 4 asks for these before deciding which levels to delete):
+
+| level | hits |
+|---|---|
+| 1 clauses `;` `:` | 17 |
+| 2 field separator `\|` | 1 |
+| 3 list markers | 1 |
+| 4 single newlines | 0 |
+| 5 commas | 0 |
+| residue (emitted intact) | **0** |
+
+Levels 4 and 5 have not fired. 25 files is too thin a sample to retire them on; decide at the
+full-corpus dry run. `run_manifest.json` records these on every run.
+
+**A measurement bug found while doing this.** `num_tokens` was counted with
+`add_special_tokens=False` and without the `"passage: "` prefix, so every figure in §7a
+understates the encoder's real input by 6 tokens. The stored field still counts raw content —
+that is what Tabla 1 describes — but the cap now reserves those 6, giving 506 rather than 512.
+
+**Inventory reconciliation** (Step 3), same sample: 1,826 rows, 25 files, **25 matched, 0
+files without a row**. The join key `Carpeta` + `Nombre estandarizado` is unique across all
+1,826 rows. Correction to Spec 02 Step 3: the 186 basename collisions span **59** distinct
+names, not 47.
+
 ## 7b. `generador.py` — built and verified 2026-08-12
 
 Two executor agents implemented Step 5 independently in separate worktrees; the better one was
@@ -367,10 +410,18 @@ grouping that must **not** be used as a filter (Spec 03 B3).
 
 ## 9. Repo state gotchas
 
-- `chunker.py` at the repo root is **0 bytes**. The delivered chunker is `chunker (1).py` —
-  rename it before importing.
+- ~~`chunker.py` at the repo root is 0 bytes~~ — resolved; `chunker.py` is the real, rewritten
+  chunker.
 - `documentos_easyocr.jsonl` is **0 bytes** — contains no results despite the name.
 - `requirements.txt` pins **no versions** and omits `torch` and `sentence-transformers`.
+  **Still open.** §1.4 makes reproduction pass/fail, so this is a real risk, not tidying.
 - `embeddings_only.E5Dense.encode_passages` defaults to `batch_size=8`; use 64 on GPU.
-- `sentence-transformers` / `FlagEmbedding` do **not import on this Windows box** (pyarrow
-  trips a Windows Application Control policy), so real encoding is Colab-only.
+- **`embeddings_only.E5Dense` does not pin the model revision** — it calls
+  `SentenceTransformer(E5_MODEL, device=...)` with no `revision=`. `pipeline_final.py`
+  therefore owns encoding itself rather than depending on it.
+- ~~`sentence-transformers` / `FlagEmbedding` do not import on this Windows box (pyarrow trips
+  a Windows Application Control policy), so real encoding is Colab-only.~~ **Wrong, and it
+  cost real design decisions.** `pip install pyarrow` fixes the import; both the tokenizer and
+  the full e5-large model run locally on CPU. This false belief is the sole reason chunking
+  budgeted on words alone, which is what let 44% of the indexed text be silently discarded.
+  Verify a claimed environment limitation before designing around it.

@@ -83,8 +83,13 @@ Measured on real corpus text, not estimated.
 | TXT (all) | 1 | 2 | 1 | 1,421 w | 0/1 |
 
 **Keep:** `MAX_WORDS = 250` (matches §9.2's return cap exactly, so `generador.py` mostly never
-splits) and word counting instead of an injected tokenizer (local and Colab chunk boundaries
-become byte-identical).
+splits).
+
+~~and word counting instead of an injected tokenizer (local and Colab chunk boundaries become
+byte-identical)~~ — **reversed 2026-08-13.** The tokenizer runs fine locally at its pinned
+revision; the belief that it could not was never tested. Pinning the revision gives the same
+byte-identical boundaries *and* lets the token cap be enforced where it matters, at chunking
+time rather than discovered at embed time.
 
 **Fix:** missing Tabla-1 fields; CSV/XLSX/PBF collapsing to one chunk each; oversized units
 never being split. Details in Spec 02, Steps 1–2.
@@ -104,7 +109,7 @@ never being split. Details in Spec 02, Steps 1–2.
 | 7 | **Language: seeded, document-level, ~50-word floor**, `None` rather than a guess. |
 | 8 | **`chunk_id` = `{i:05d}`.** |
 | 9 | **One cleaner** — the extractor's. |
-| 10 | **Oversized units: segment, don't break a rule.** Five boundary levels; residue hard-cut and logged as a data problem. |
+| 10 | **Oversized units: segment, don't break a rule.** Five boundary levels; residue emitted **intact**, not hard-cut — revised 2026-08-13, see below. |
 | 11 | **`IndexFlatIP` rationale** lives in Spec 03, not here. |
 | 12 | **Flatten catalog title + scalars** into chunk metadata for the 313 matched documents. |
 
@@ -119,8 +124,20 @@ inspecting every offender:
 | CSV (5) | 239,700 | 107 (0.045%) | 7,193 w | `\| URL: ... \|` field runs |
 
 **No confirmed case of genuine >250-word prose in a single sentence.** Every offender is an
-extraction artifact the five-level ladder reaches. Whatever survives is a data problem —
-hard-cut, logged, and counted.
+extraction artifact the five-level ladder reaches. Measured residue after the ladder on the
+sample corpus: **zero**.
+
+**Revised 2026-08-13 — the residue is no longer hard-cut.** Whatever survives all five levels is
+emitted intact and over the cap. §3.3 is labelled *"Requisito obligatorio"*; §4.3 only asks that
+fragments be *"diseñados para no superar"* the limit. Hard-cutting breaks the mandatory rule to
+satisfy the advisory one, so the sentence survives and the encoder truncates its tail. It stays
+logged and counted (`ESCALERA_HITS["residuo"]`, reported in `run_manifest.json`).
+
+**Also revised: packing is no longer word-only.** The chunker enforces `MAX_WORDS = 250` and
+`MAX_TOKENS = 506` simultaneously, at sentence granularity. Measured on real text, the word cap
+alone left 29.1% of chunks over the encoder ceiling and 43.8% of indexed text silently
+discarded; with both caps, both figures are zero. The old objection — that a tokenizer could not
+run on the development machine — was simply false.
 
 ---
 
