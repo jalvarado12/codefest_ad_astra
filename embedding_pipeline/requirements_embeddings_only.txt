@@ -1,5 +1,0 @@
-# Deps for embeddings_only.py specifically -- no faiss-cpu, no chunker deps.
-# torch/numpy come preinstalled on Colab images; pinned loosely so
-# `uv pip install --system` (or plain pip) does not fight the base image.
-sentence-transformers>=3.0
-FlagEmbedding>=1.3
