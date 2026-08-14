@@ -678,10 +678,23 @@ The implementation is neater than it sounds: hits are sorted globally by `(-scor
 so the **first occurrence** of any `doc_id` in that order is automatically its best chunk.
 Deduplicating in place gives max-pooling *and* the deterministic tie-break for free.
 
-**Why the tie-break matters.** The index is built in fp16 on a GPU; a judge re-running on CPU
-gets fp32 and slightly different similarity values. Near-ties can reorder. Sorting by
-`(-score, chunk_id)` makes the output stable across environments — the difference between
-"reproduces" and "mostly reproduces", and §1.4 makes reproduction a pass/fail gate.
+**Why the tie-break matters.** The delivered `resultados.jsonl` was generated on a GPU (fp16
+autocast); a judge re-running `generador.py` on CPU gets fp32 and slightly different similarity
+values, because floating-point arithmetic is not associative — GPU and CPU reduce the same sum
+in a different order and land on different roundings in the last few decimal digits. Sorting by
+`(-score, chunk_id)` makes ties *within a single run* deterministic, which is real and worth
+having, but it does not make GPU and CPU output bit-identical: two candidates that are merely
+*close*, not exactly tied, still sort by their (slightly different) raw scores before the
+tie-break ever applies.
+
+**Measured, not assumed.** Re-running `generador.py` locally on CPU against the same delivered
+`index.faiss`/`metadata.jsonl` and diffing against the GPU-generated `resultados.jsonl`: 45/50
+queries are byte-identical; 5/50 (q018, q029, q037, q041, q043) differ only in a rank swap
+between near-tied candidates — never a different top match, never a different document/chunk
+set, only ordering at the margin. That is the practical ceiling for cross-hardware
+reproducibility without either giving up GPU acceleration or controlling the judge's hardware,
+and it is a much smaller risk than the pass/fail gate actually tests: whether `generador.py`
+*runs at all* under the exact invocation contract in §1.5 (see §12).
 
 ### 6.5 Selecting the ten fragments
 
@@ -1146,6 +1159,21 @@ justify than when that requirement was written, not less. §5.5 and §9 are the 
 `python _gentest/validate_resultados.py` against it, and `python generador.py selftest`, whose
 check 11 runs the delivery standalone from an empty directory with no repository imports. §1.4
 is pass/fail: *"Si no es posible reproducir los resultados, se excluirá de la evaluación."*
+
+**~~7. Fix the invocation contract.~~ Found and fixed.** `generador.py`'s CLI took `--index`,
+`--metadata`, `--queries` as *required* flags with no defaults — but §1.5 is explicit that the
+judge runs `python generador.py` with **zero arguments** from `entrega/`'s root, defaulting to
+`--consultas consultas.jsonl --base-vectorial ./base_vectorial --salida resultados.jsonl`, and
+*"el jurado no inferirá parámetros adicionales."* The old contract would have crashed on argument
+parsing before doing any work — an instant §1.4 exclusion, and a bigger risk than the fp16/fp32
+question above. This was only caught because the actual rules PDF was read late; §1.4/§1.5 as
+cited elsewhere in this document were paraphrases of it, not the literal text. Fixed: the CLI now
+matches §1.5's flag names and defaults exactly, `base_vectorial/encoder_*/` is auto-discovered
+per §1.4's directory contract, and `selftest` check 11 was rewritten to actually invoke
+`python generador.py` with zero arguments against the real directory shape — it previously
+validated the old (wrong) explicit-flags contract, so it gave false confidence. Verified for
+real: zero-arg run against the delivered `index.faiss`/`metadata.jsonl`, exit 0, 50/50 valid
+lines, ~111s on CPU.
 
 ### Not blocking, but each is a known cost
 
