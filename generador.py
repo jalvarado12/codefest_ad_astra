@@ -12,11 +12,10 @@ evaluacion" (Sec. 1.4). The ~30-line E5 wrapper below is the one piece that
 would otherwise live in embedding_pipeline/embeddings_only.py; it is
 duplicated here on purpose.
 
-Usage:
-    python generador.py --index base_vectorial/encoder_multilingual-e5-large/index.faiss \\
-        --metadata base_vectorial/encoder_multilingual-e5-large/metadata.jsonl \\
-        --queries Extracto_Preguntas_50_v2.pdf --out entrega/resultados.jsonl \\
-        --k 50 --threshold -1.0
+Usage (Sec. 1.5 -- must also run with zero arguments from entrega/'s root):
+    python generador.py
+    python generador.py --consultas consultas.jsonl \\
+        --base-vectorial ./base_vectorial --salida resultados.jsonl
     python generador.py selftest
 """
 
@@ -383,6 +382,21 @@ def generar(index_path, metadata_path, queries_path, out_path,
 
 # --------------------------------------------------------------------- CLI --
 
+def _resolver_base_vectorial(root):
+    """Sec. 1.4: base_vectorial/encoder_<nombre>/{index.faiss,metadata.jsonl}.
+    Combining multiple encoders (Sec. 8.4) is optional and not implemented
+    here -- this delivery ships exactly one."""
+    root = Path(root)
+    subdirs = sorted(p for p in root.iterdir() if p.is_dir() and p.name.startswith("encoder_"))
+    if not subdirs:
+        raise FileNotFoundError(f"no se encontro ninguna subcarpeta encoder_* en {root}")
+    if len(subdirs) > 1:
+        raise NotImplementedError(
+            f"multiples encoders en {root} ({[d.name for d in subdirs]}) -- "
+            "este generador no implementa la combinacion opcional de la Sec. 8.4")
+    return subdirs[0] / "index.faiss", subdirs[0] / "metadata.jsonl"
+
+
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else argv
     if argv and argv[0] == "selftest":
@@ -390,10 +404,12 @@ def main(argv=None):
         return
 
     ap = argparse.ArgumentParser(description="Genera resultados.jsonl (CODEFEST AD ASTRA 2026)")
-    ap.add_argument("--index", required=True)
-    ap.add_argument("--metadata", required=True)
-    ap.add_argument("--queries", required=True)
-    ap.add_argument("--out", default="entrega/resultados.jsonl")
+    ap.add_argument("--consultas", default="consultas.jsonl",
+                     help="Sec. 1.5: ruta al archivo de consultas de entrada")
+    ap.add_argument("--base-vectorial", default="./base_vectorial",
+                     help="Sec. 1.5: raiz de la base vectorial entregada")
+    ap.add_argument("--salida", default="./resultados.jsonl",
+                     help="Sec. 1.5: ruta del archivo de resultados a generar")
     ap.add_argument("--k", type=int, default=DEFAULT_K)
     ap.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
     ap.add_argument("--batch-size", type=int, default=32)
@@ -402,8 +418,9 @@ def main(argv=None):
                           "Selftest/CI only -- never use for a real submission.")
     args = ap.parse_args(argv)
 
+    index_path, metadata_path = _resolver_base_vectorial(args.base_vectorial)
     encoder = _StubEncoder() if args.stub_encoder else None
-    out = generar(args.index, args.metadata, args.queries, args.out,
+    out = generar(index_path, metadata_path, args.consultas, args.salida,
                   k=args.k, threshold=args.threshold, batch_size=args.batch_size,
                   encoder=encoder)
     print(f"escrito {out}")
@@ -611,19 +628,23 @@ def selftest():
         print("OK 4: full run completed with the stub's encode_passages() untouched "
               "(it raises on call) -- queries only ever went through encode_queries")
 
-        # -- 11. standalone delivery: copy generador.py + synthetic artifacts
-        # to an empty dir, run there as a subprocess, assert 50 valid lines --
+        # -- 11. standalone delivery, Sec. 1.5's literal gate: copy generador.py
+        # + the real entrega/ tree (base_vectorial/encoder_x/, consultas.jsonl)
+        # to an empty dir and invoke with ZERO ARGUMENTS, exactly as the judge
+        # will. --stub-encoder is the one allowed override (no real model in
+        # a selftest); everything else must resolve from defaults alone. --
         standalone_dir = tmp / "standalone"
-        standalone_dir.mkdir()
+        encoder_dir = standalone_dir / "base_vectorial" / "encoder_test"
+        encoder_dir.mkdir(parents=True)
         shutil.copy(Path(__file__).resolve(), standalone_dir / "generador.py")
-        shutil.copy(index_path, standalone_dir / "index.faiss")
-        shutil.copy(meta_path, standalone_dir / "metadata.jsonl")
-        shutil.copy(queries_pdf, standalone_dir / "queries.pdf")
+        shutil.copy(index_path, encoder_dir / "index.faiss")
+        shutil.copy(meta_path, encoder_dir / "metadata.jsonl")
+        with open(standalone_dir / "consultas.jsonl", "w", encoding="utf-8") as f:
+            for i in range(1, 51):
+                f.write(json.dumps({"query_id": f"q{i:03d}", "text": f"consulta de prueba {i}"},
+                                    ensure_ascii=False) + "\n")
         result = subprocess.run(
-            [sys.executable, "generador.py", "--index", "index.faiss",
-             "--metadata", "metadata.jsonl", "--queries", "queries.pdf",
-             "--out", "resultados.jsonl", "--k", "50", "--threshold", str(DEFAULT_THRESHOLD),
-             "--stub-encoder"],
+            [sys.executable, "generador.py", "--stub-encoder"],
             cwd=str(standalone_dir), capture_output=True, text=True, timeout=120)
         assert result.returncode == 0, f"standalone run failed:\n{result.stdout}\n{result.stderr}"
         out_lines = (standalone_dir / "resultados.jsonl").read_text(encoding="utf-8").splitlines()
@@ -631,7 +652,8 @@ def selftest():
         for line in out_lines:
             rec = json.loads(line)
             assert len(rec["documents"]) == N_DOCUMENTS and len(rec["fragments"]) == N_FRAGMENTS
-        print("OK 11: standalone delivery (generador.py + artifacts, nothing else) produces 50 valid lines")
+        print("OK 11: standalone delivery, zero-argument invocation (Sec. 1.5's literal gate) "
+              "produces 50 valid lines")
 
         print("generador.py selftest OK")
     finally:
