@@ -1,3 +1,0 @@
-#Verificancion de profundidad de archivos por niveles 
-cd $env:USERPROFILE\Downloads
->> python inspect_structure.py --input "C:\Users\ANGEL\Desktop\Documentos\Docs\CORPUS CODEFEST AD ASTRA 2026"
